@@ -1,0 +1,20 @@
+# Credenciais
+api/config.php
+.env
+
+# Node
+node_modules/
+
+# Logs e dados locais
+logs/*.log
+*.log
+
+# Sistema
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# IDE
+.vscode/
+.idea/

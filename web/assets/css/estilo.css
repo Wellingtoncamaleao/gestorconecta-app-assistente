@@ -1,0 +1,348 @@
+/* ASSISTENTE IA - Tema escuro */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    --bg-principal: #0f1117;
+    --bg-secundario: #1a1d27;
+    --bg-terciario: #252830;
+    --borda: #2d3040;
+    --texto: #e4e4e7;
+    --texto-secundario: #9ca3af;
+    --acento: #6366f1;
+    --acento-hover: #818cf8;
+    --sucesso: #22c55e;
+    --aviso: #eab308;
+    --erro: #ef4444;
+    --info: #3b82f6;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg-principal);
+    color: var(--texto);
+    min-height: 100vh;
+}
+
+#app {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 16px;
+}
+
+/* HEADER */
+
+header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 0;
+    border-bottom: 1px solid var(--borda);
+    margin-bottom: 16px;
+}
+
+header h1 {
+    font-size: 20px;
+    font-weight: 600;
+}
+
+#status {
+    font-size: 13px;
+    color: var(--sucesso);
+}
+
+/* NAV */
+
+nav {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.aba {
+    padding: 8px 16px;
+    background: var(--bg-secundario);
+    border: 1px solid var(--borda);
+    border-radius: 6px;
+    color: var(--texto-secundario);
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+}
+
+.aba:hover {
+    background: var(--bg-terciario);
+    color: var(--texto);
+}
+
+.aba.ativa {
+    background: var(--acento);
+    color: white;
+    border-color: var(--acento);
+}
+
+/* PAINEIS */
+
+.painel {
+    display: none;
+}
+
+.painel.ativo {
+    display: block;
+}
+
+/* CONVERSAS */
+
+#painel-conversas {
+    display: none;
+    grid-template-columns: 300px 1fr;
+    gap: 16px;
+    height: calc(100vh - 150px);
+}
+
+#painel-conversas.ativo {
+    display: grid;
+}
+
+#lista-sessoes {
+    background: var(--bg-secundario);
+    border: 1px solid var(--borda);
+    border-radius: 8px;
+    overflow-y: auto;
+}
+
+.sessao-item {
+    padding: 12px;
+    border-bottom: 1px solid var(--borda);
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.sessao-item:hover {
+    background: var(--bg-terciario);
+}
+
+.sessao-item.ativa {
+    background: var(--bg-terciario);
+    border-left: 3px solid var(--acento);
+}
+
+.sessao-item .canal {
+    display: inline-block;
+    padding: 2px 6px;
+    background: var(--bg-terciario);
+    border-radius: 4px;
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--acento);
+    margin-bottom: 4px;
+}
+
+.sessao-item .titulo {
+    display: block;
+    font-size: 13px;
+    color: var(--texto);
+    margin-bottom: 4px;
+}
+
+.sessao-item .data,
+.sessao-item .msgs {
+    font-size: 11px;
+    color: var(--texto-secundario);
+}
+
+/* MENSAGENS */
+
+#detalhe-sessao {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-secundario);
+    border: 1px solid var(--borda);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+#mensagens {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+}
+
+.msg {
+    margin-bottom: 16px;
+    max-width: 80%;
+}
+
+.msg.recebida {
+    margin-right: auto;
+}
+
+.msg.enviada {
+    margin-left: auto;
+}
+
+.msg .autor {
+    display: block;
+    font-size: 11px;
+    color: var(--texto-secundario);
+    margin-bottom: 4px;
+}
+
+.msg.enviada .autor {
+    text-align: right;
+    color: var(--acento);
+}
+
+.msg pre {
+    background: var(--bg-terciario);
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-family: inherit;
+}
+
+.msg.enviada pre {
+    background: #1e1b4b;
+    border: 1px solid #312e81;
+}
+
+.msg .hora {
+    display: block;
+    font-size: 10px;
+    color: var(--texto-secundario);
+    margin-top: 4px;
+}
+
+.msg.enviada .hora {
+    text-align: right;
+}
+
+/* FORM ENVIAR */
+
+#form-enviar {
+    display: flex;
+    padding: 12px;
+    border-top: 1px solid var(--borda);
+    gap: 8px;
+}
+
+#input-mensagem {
+    flex: 1;
+    padding: 10px 14px;
+    background: var(--bg-terciario);
+    border: 1px solid var(--borda);
+    border-radius: 6px;
+    color: var(--texto);
+    font-size: 13px;
+    outline: none;
+}
+
+#input-mensagem:focus {
+    border-color: var(--acento);
+}
+
+#form-enviar button {
+    padding: 10px 20px;
+    background: var(--acento);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.2s;
+}
+
+#form-enviar button:hover {
+    background: var(--acento-hover);
+}
+
+/* MEMORIA */
+
+.memoria-item {
+    display: grid;
+    grid-template-columns: 100px 150px 1fr;
+    gap: 12px;
+    padding: 10px 14px;
+    background: var(--bg-secundario);
+    border: 1px solid var(--borda);
+    border-radius: 6px;
+    margin-bottom: 8px;
+    font-size: 13px;
+}
+
+.memoria-item .categoria {
+    color: var(--acento);
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 11px;
+}
+
+.memoria-item .chave {
+    color: var(--texto);
+    font-weight: 500;
+}
+
+.memoria-item .valor {
+    color: var(--texto-secundario);
+}
+
+/* LOGS */
+
+.log-item {
+    display: grid;
+    grid-template-columns: 80px 60px 120px 1fr;
+    gap: 12px;
+    padding: 8px 14px;
+    background: var(--bg-secundario);
+    border: 1px solid var(--borda);
+    border-radius: 4px;
+    margin-bottom: 4px;
+    font-size: 12px;
+    font-family: 'Cascadia Code', 'Fira Code', monospace;
+}
+
+.log-item .hora {
+    color: var(--texto-secundario);
+}
+
+.log-item .nivel {
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.log-item.nivel-erro .nivel { color: var(--erro); }
+.log-item.nivel-aviso .nivel { color: var(--aviso); }
+.log-item.nivel-info .nivel { color: var(--info); }
+.log-item.nivel-debug .nivel { color: var(--texto-secundario); }
+
+.log-item .componente {
+    color: var(--acento);
+}
+
+.log-item .mensagem {
+    color: var(--texto);
+}
+
+/* RESPONSIVO */
+
+@media (max-width: 768px) {
+    #painel-conversas.ativo {
+        grid-template-columns: 1fr;
+        grid-template-rows: 200px 1fr;
+    }
+
+    .memoria-item {
+        grid-template-columns: 1fr;
+    }
+
+    .log-item {
+        grid-template-columns: 1fr;
+    }
+}

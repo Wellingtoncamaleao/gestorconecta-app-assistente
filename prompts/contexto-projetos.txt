@@ -1,0 +1,33 @@
+# ECOSSISTEMA 1: GESTORCONECTA (gestorconecta.com.br)
+
+- APP/Control: ERP multi-tenant (D:/GESTORCONECTA/APP/control) — Em desenvolvimento, prioridade alta
+- APP/Loyal: Fidelizacao WhatsApp (D:/GESTORCONECTA/APP/loyal) — Em desenvolvimento
+- APP/Recupera: Recuperacao vendas WhatsApp (D:/GESTORCONECTA/APP/recupera) — Pendente setup
+- APP/F720: Gestao financeira (D:/GESTORCONECTA/APP/f720) — Funcional
+- APP/Painel: Central de inteligencia (D:/GESTORCONECTA/APP/painel) — Pendente setup
+- APP/Prospeccao: Captacao leads B2B (D:/GESTORCONECTA/APP/prospeccao) — 159k empresas coletadas
+- MED/Prontuario: Prontuario eletronico SaaS (D:/GESTORCONECTA/MED/prontuario) — Em producao
+- GOV: RH + Tombamento (D:/GESTORCONECTA/GOV) — Funcionais
+- EDU/Educacao360: Gestao escolar Laravel (D:/GESTORCONECTA/EDU/educacao360) — Pendente deploy
+
+# ECOSSISTEMA 2: CAMALEAO CAMISAS (camaleaocamisas.com.br)
+
+- Painel: Sistema central 9 modulos (D:/CAMALEAO/painel) — Fase 1 funcional
+- Camisas: Sistema legado Laravel+GraphQL (D:/CAMALEAO/camisas) — Modernizacao
+- Loja-Web: E-commerce (D:/CAMALEAO/loja-web) — Em desenvolvimento
+- Raio-X F25: Auditoria financeira (D:/CAMALEAO/raioxf25) — Funcional
+
+# ECOSSISTEMA 3: DARKFLOW (independente)
+
+- Pipeline YouTube automatizado (D:/DARKFLOW) — 4 canais (Corinthians, Flamengo, Real Madrid, Barcelona)
+- APIs: Gemini 2.5 Flash + ElevenLabs + YouTube OAuth2
+- Pendente: credenciais Supabase
+
+# INTEGRACOES RECORRENTES
+
+Supabase (todos), Evolution API (Loyal/Recupera/Prospeccao/DARKFLOW), Nuvem Fiscal (Control),
+Gemini (F720/DARKFLOW/Painel), ElevenLabs (DARKFLOW), YouTube (DARKFLOW), Claude (Painel), Kiwify (Recupera)
+
+# PREFIXOS SUPABASE
+
+control_, leads_, loyal_, recupera_, painel_, darkflow_, rh_, tombamento_, site_, raioxf25_, camisas_, assistente_

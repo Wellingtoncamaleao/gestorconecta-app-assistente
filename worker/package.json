@@ -1,0 +1,10 @@
+{
+  "name": "assistente-worker",
+  "version": "1.0.0",
+  "description": "Worker que monitora fila e executa Claude Code CLI",
+  "main": "fila-watcher.js",
+  "scripts": {
+    "start": "node fila-watcher.js"
+  },
+  "dependencies": {}
+}

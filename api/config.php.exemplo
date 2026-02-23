@@ -1,0 +1,24 @@
+<?php
+/**
+ * ASSISTENTE IA PESSOAL - Configuracao
+ * Copiar para config.php e preencher as credenciais
+ * NUNCA commitar config.php (esta no .gitignore)
+ */
+
+// Supabase
+define('SUPABASE_URL', 'https://SEU-PROJETO.supabase.co');
+define('SUPABASE_SERVICE_KEY', 'eyJ...');
+
+// Telegram Bot
+define('TELEGRAM_BOT_TOKEN', 'SEU_TOKEN_DO_BOTFATHER');
+define('TELEGRAM_CHAT_IDS', ['SEU_CHAT_ID']);
+
+// Evolution API (WhatsApp)
+define('EVOLUTION_API_URL', 'https://evolution.gestorconecta.com.br');
+define('EVOLUTION_API_KEY', 'SUA_KEY');
+define('EVOLUTION_INSTANCIA', 'assistente');
+define('WHATSAPP_CHAT_IDS', ['5511999999999@s.whatsapp.net']);
+
+// Fila (diretorio no container)
+define('FILA_DIR', '/var/assistente/fila');
+define('LOGS_DIR', '/var/assistente/logs');
