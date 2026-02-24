@@ -275,7 +275,7 @@ function responderErro($mensagem, $codigo = 400) {
 }
 
 // ========================================
-// FERRAMENTAS (mapeamento topico → ferramenta)
+// FERRAMENTAS (mapeamento grupo/topico → ferramenta)
 // ========================================
 
 function carregarFerramentas() {
@@ -286,27 +286,23 @@ function carregarFerramentas() {
 }
 
 function detectarFerramenta($chatId, $threadId) {
-    if (!$threadId) return 'geral';
-
     $mapa = buscarConfig('mapa_topicos');
     if (!$mapa) return 'geral';
 
     $mapa = json_decode($mapa, true);
     if (!$mapa) return 'geral';
 
-    // Tentar chat_id:thread_id primeiro, depois thread_id sozinho
-    $chave = $chatId . ':' . $threadId;
-    if (isset($mapa[$chave])) return $mapa[$chave];
-    if (isset($mapa[$threadId])) return $mapa[$threadId];
+    // Prioridade: chat_id:thread_id > chat_id sozinho
+    if ($threadId) {
+        $chave = $chatId . ':' . $threadId;
+        if (isset($mapa[$chave])) return $mapa[$chave];
+    }
+    if (isset($mapa[$chatId])) return $mapa[$chatId];
 
     return 'geral';
 }
 
-function mapearTopico($chatId, $threadId, $slug) {
-    if (!$threadId) {
-        return 'Comando /mapear so funciona dentro de um topico (Topic).';
-    }
-
+function mapearFerramenta($chatId, $threadId, $slug) {
     $ferramentas = carregarFerramentas();
     if (!isset($ferramentas[$slug])) {
         $disponiveis = implode(', ', array_keys($ferramentas));
@@ -318,8 +314,8 @@ function mapearTopico($chatId, $threadId, $slug) {
     $mapa = $mapaAtual ? json_decode($mapaAtual, true) : [];
     if (!is_array($mapa)) $mapa = [];
 
-    // Salvar mapping
-    $chave = $chatId . ':' . $threadId;
+    // Chave: grupo inteiro (chat_id) ou topico especifico (chat_id:thread_id)
+    $chave = $threadId ? $chatId . ':' . $threadId : $chatId;
     $mapa[$chave] = $slug;
 
     // Upsert no configs
@@ -329,23 +325,20 @@ function mapearTopico($chatId, $threadId, $slug) {
     ]);
 
     $nome = $ferramentas[$slug]['nome'] ?? $slug;
-    return "Topico mapeado para: *{$nome}*\nSlug: `{$slug}`\nPrompt: {$ferramentas[$slug]['prompt']}";
+    $tipo = $threadId ? 'Topico' : 'Grupo';
+    return "{$tipo} mapeado para: *{$nome}*\nSlug: `{$slug}`";
 }
 
-function desmapearTopico($chatId, $threadId) {
-    if (!$threadId) {
-        return 'Comando /desmapear so funciona dentro de um topico (Topic).';
-    }
-
+function desmapearFerramenta($chatId, $threadId) {
     $mapaAtual = buscarConfig('mapa_topicos');
     $mapa = $mapaAtual ? json_decode($mapaAtual, true) : [];
     if (!is_array($mapa)) $mapa = [];
 
-    $chave = $chatId . ':' . $threadId;
+    $chave = $threadId ? $chatId . ':' . $threadId : $chatId;
     $antigo = $mapa[$chave] ?? null;
 
     if (!$antigo) {
-        return 'Este topico nao tem ferramenta mapeada.';
+        return 'Este grupo nao tem ferramenta mapeada.';
     }
 
     unset($mapa[$chave]);
@@ -355,7 +348,7 @@ function desmapearTopico($chatId, $threadId) {
         'corpo' => ['valor' => json_encode($mapa), 'atualizado_em' => date('c')]
     ]);
 
-    return "Mapeamento removido (era: `{$antigo}`).\nTopico voltou para modo *Geral*.";
+    return "Mapeamento removido (era: `{$antigo}`).\nVoltou para modo *Geral*.";
 }
 
 function listarFerramentas() {
@@ -364,7 +357,7 @@ function listarFerramentas() {
     foreach ($ferramentas as $slug => $info) {
         $lista .= "• *{$info['nome']}* (`{$slug}`)\n  {$info['descricao']}\n\n";
     }
-    $lista .= "Use `/mapear slug` dentro de um topico para ativar.";
+    $lista .= "Use `/mapear slug` neste grupo para ativar.";
     return $lista;
 }
 
@@ -382,33 +375,33 @@ function processarComando($texto, $chatId, $threadId) {
         return true;
     }
 
-    // /mapear <slug> — mapear topico a ferramenta
+    // /mapear <slug> — mapear grupo/topico a ferramenta
     if (strpos($texto, '/mapear ') === 0) {
         $slug = trim(substr($texto, 8));
-        $resultado = mapearTopico($chatId, $threadId, $slug);
+        $resultado = mapearFerramenta($chatId, $threadId, $slug);
         enviarTelegram($chatId, $resultado, $extras);
         return true;
     }
 
-    // /desmapear — remover mapeamento do topico
+    // /desmapear — remover mapeamento
     if ($texto === '/desmapear') {
-        $resultado = desmapearTopico($chatId, $threadId);
+        $resultado = desmapearFerramenta($chatId, $threadId);
         enviarTelegram($chatId, $resultado, $extras);
         return true;
     }
 
-    // /topicos — mostrar mapeamentos ativos
-    if ($texto === '/topicos') {
+    // /mapeamentos — mostrar mapeamentos ativos
+    if ($texto === '/mapeamentos') {
         $mapa = buscarConfig('mapa_topicos');
         $mapa = $mapa ? json_decode($mapa, true) : [];
         if (empty($mapa)) {
-            enviarTelegram($chatId, 'Nenhum topico mapeado. Use `/mapear slug` em um topico.', $extras);
+            enviarTelegram($chatId, 'Nenhum mapeamento ativo. Use `/mapear slug` em um grupo.', $extras);
         } else {
             $ferramentas = carregarFerramentas();
-            $lista = "Topicos mapeados:\n\n";
+            $lista = "Mapeamentos ativos:\n\n";
             foreach ($mapa as $chave => $slug) {
                 $nome = $ferramentas[$slug]['nome'] ?? $slug;
-                $lista .= "• `{$chave}` → *{$nome}* (`{$slug}`)\n";
+                $lista .= "• `{$chave}` → *{$nome}*\n";
             }
             enviarTelegram($chatId, $lista, $extras);
         }
