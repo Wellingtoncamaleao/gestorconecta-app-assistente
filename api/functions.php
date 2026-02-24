@@ -369,6 +369,9 @@ function processarComando($texto, $chatId, $threadId) {
     $extras = [];
     if ($threadId) $extras['message_thread_id'] = (int)$threadId;
 
+    // Em grupos, Telegram envia "/comando@nomedoBot" — remover @bot
+    $texto = preg_replace('/@\w+/', '', $texto);
+
     // /ferramentas — listar ferramentas
     if ($texto === '/ferramentas') {
         enviarTelegram($chatId, listarFerramentas(), $extras);
