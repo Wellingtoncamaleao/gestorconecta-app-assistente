@@ -5,7 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execFile } = require('child_process');
+const { spawn } = require('child_process');
 const http = require('http');
 
 // Diretorios
@@ -15,11 +15,10 @@ const PROMPTS_DIR = '/var/www/html/prompts';
 const TEMP_DIR = '/tmp/assistente';
 
 // Config
-const TIMEOUT_MS = 120000; // 2 minutos
-const MAX_TURNS = 5;
-const INTERVALO_POLL_MS = 2000; // 2 segundos
+const TIMEOUT_MS = 180000; // 3 minutos
+const INTERVALO_POLL_MS = 2000;
 
-// Supabase config (lido das env vars ou hardcoded no container)
+// Supabase config
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
 
@@ -105,63 +104,83 @@ async function carregarHistorico(sessaoId) {
 }
 
 // ========================================
-// EXECUTAR CLAUDE CODE CLI
+// EXECUTAR CLAUDE CODE CLI (via spawn + stdin)
 // ========================================
 
 function executarClaude(mensagem, contexto, claudeSessionId) {
     return new Promise((resolve, reject) => {
-        // Montar prompt completo: contexto + mensagem do usuario
         const promptCompleto = contexto
             ? `${contexto}\n\n---\nMensagem do usuario:\n${mensagem}`
             : mensagem;
 
-        const args = [
-            '-p', promptCompleto,
-            '--output-format', 'json',
-            '--max-turns', '1',
-        ];
+        // Salvar prompt em arquivo temp e passar via shell pipe
+        const promptFile = path.join(TEMP_DIR, `p-${Date.now()}.txt`);
+        fs.writeFileSync(promptFile, promptCompleto, 'utf8');
 
-        // Resumir sessao anterior
+        // Construir comando shell: ler arquivo e passar via -p
+        const args = ['--output-format', 'json', '--max-turns', '3'];
+
         if (claudeSessionId) {
             args.push('--resume', claudeSessionId);
         }
 
         const inicio = Date.now();
 
-        log('claude', `Executando CLI...`, {
+        log('claude', 'Executando CLI...', {
             msgLen: mensagem.length,
             ctxLen: contexto ? contexto.length : 0,
             resume: claudeSessionId || 'nova',
-            argsCount: args.length,
         });
 
-        const proc = execFile('claude', args, {
-            timeout: TIMEOUT_MS,
-            maxBuffer: 10 * 1024 * 1024, // 10MB
-            env: { ...process.env },
+        // Usar spawn com stdin pipe
+        const proc = spawn('claude', args, {
+            env: { ...process.env, HOME: '/root' },
             cwd: '/var/www/html',
-        }, (erro, stdout, stderr) => {
+            stdio: ['pipe', 'pipe', 'pipe'],
+        });
+
+        let stdout = '';
+        let stderr = '';
+
+        proc.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+        proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+
+        // Enviar prompt via stdin e fechar
+        proc.stdin.write(promptCompleto);
+        proc.stdin.end();
+
+        // Timeout manual
+        const timer = setTimeout(() => {
+            log('claude', `TIMEOUT apos ${TIMEOUT_MS}ms - matando processo`);
+            proc.kill('SIGTERM');
+            setTimeout(() => proc.kill('SIGKILL'), 5000);
+        }, TIMEOUT_MS);
+
+        proc.on('close', (code, signal) => {
+            clearTimeout(timer);
             const tempoMs = Date.now() - inicio;
 
-            if (erro) {
-                log('claude', `ERRO (${tempoMs}ms): ${erro.message}`);
-                if (erro.killed) log('claude', 'Processo foi morto (timeout?)');
-                if (stderr) log('claude', `stderr (primeiros 500): ${stderr.substring(0, 500)}`);
-                if (stdout) log('claude', `stdout (primeiros 500): ${stdout.substring(0, 500)}`);
-                reject(erro);
+            // Limpar arquivo temp
+            try { fs.unlinkSync(promptFile); } catch {}
+
+            if (signal) {
+                log('claude', `Morto por sinal: ${signal} (${tempoMs}ms)`);
+                reject(new Error(`Processo morto: ${signal}`));
                 return;
             }
 
-            if (stderr) {
-                log('claude', `stderr (nao-fatal): ${stderr.substring(0, 200)}`);
+            if (code !== 0) {
+                log('claude', `Exit code ${code} (${tempoMs}ms)`);
+                log('claude', `stderr: ${stderr.substring(0, 1000)}`);
+                log('claude', `stdout: ${stdout.substring(0, 500)}`);
+                reject(new Error(`Exit ${code}: ${stderr.substring(0, 200)}`));
+                return;
             }
+
+            log('claude', `Concluido em ${tempoMs}ms (${stdout.length} bytes)`);
 
             try {
                 const resultado = JSON.parse(stdout);
-                log('claude', `OK (${tempoMs}ms)`, {
-                    tokens: resultado.usage?.output_tokens || 0,
-                    model: resultado.modelUsage ? Object.keys(resultado.modelUsage)[0] : 'unknown',
-                });
                 resolve({
                     texto: resultado.result || resultado.text || stdout,
                     sessionId: resultado.session_id || null,
@@ -171,10 +190,9 @@ function executarClaude(mensagem, contexto, claudeSessionId) {
                     tempoMs,
                 });
             } catch {
-                // Se nao for JSON valido, retornar o texto bruto
-                log('claude', `Resposta nao-JSON (${tempoMs}ms): ${stdout.substring(0, 200)}`);
+                log('claude', `Resposta nao-JSON: ${stdout.substring(0, 300)}`);
                 resolve({
-                    texto: stdout.trim(),
+                    texto: stdout.trim() || 'Sem resposta do CLI',
                     sessionId: null,
                     modelo: 'desconhecido',
                     tokensEntrada: 0,
@@ -182,6 +200,13 @@ function executarClaude(mensagem, contexto, claudeSessionId) {
                     tempoMs,
                 });
             }
+        });
+
+        proc.on('error', (erro) => {
+            clearTimeout(timer);
+            log('claude', `Erro spawn: ${erro.message}`);
+            try { fs.unlinkSync(promptFile); } catch {}
+            reject(erro);
         });
     });
 }
@@ -211,7 +236,7 @@ function enviarViaPHP(canal, chatId, texto, messageId) {
             let dados = '';
             res.on('data', chunk => dados += chunk);
             res.on('end', () => {
-                log('enviar', `${canal} resposta: ${res.statusCode}`);
+                log('enviar', `${canal} status: ${res.statusCode}`);
                 resolve(dados);
             });
         });
@@ -233,7 +258,7 @@ function enviarViaPHP(canal, chatId, texto, messageId) {
 let processando = false;
 
 async function processarItem(arquivo) {
-    if (processando) return; // Uma mensagem por vez
+    if (processando) return;
     processando = true;
 
     const nomeArquivo = path.basename(arquivo);
@@ -256,7 +281,7 @@ async function processarItem(arquivo) {
             historico ? `\n## Historico Recente\n${historico}` : '',
         ].filter(Boolean).join('\n');
 
-        log('fila', `Contexto montado: ${contexto.length} chars`);
+        log('fila', `Contexto: ${contexto.length} chars`);
 
         // Executar Claude Code CLI
         const resultado = await executarClaude(
@@ -265,7 +290,7 @@ async function processarItem(arquivo) {
             item.claude_session_id
         );
 
-        log('claude', `Resposta: "${resultado.texto.substring(0, 100)}..."`);
+        log('fila', `Resposta: "${resultado.texto.substring(0, 100)}"`);
 
         // Enviar resposta ao canal
         await enviarViaPHP(item.canal, item.chat_id, resultado.texto, item.message_id);
@@ -287,7 +312,6 @@ async function processarItem(arquivo) {
                 }
             });
 
-            // Atualizar sessao com session_id do Claude
             if (resultado.sessionId && item.sessao_id) {
                 await supabaseFetch(`assistente_sessoes?id=eq.${item.sessao_id}`, {
                     metodo: 'PATCH',
@@ -301,14 +325,12 @@ async function processarItem(arquivo) {
         }
 
         // Mover para processados
-        const destino = path.join(PROCESSADOS_DIR, nomeArquivo);
-        fs.renameSync(arquivo, destino);
+        fs.renameSync(arquivo, path.join(PROCESSADOS_DIR, nomeArquivo));
         log('fila', `Concluido: ${nomeArquivo}`);
 
     } catch (erro) {
-        log('fila', `ERRO processando ${nomeArquivo}: ${erro.message}`);
+        log('fila', `ERRO: ${erro.message}`);
 
-        // Tentar enviar mensagem de erro ao usuario
         try {
             const item = JSON.parse(fs.readFileSync(arquivo, 'utf8'));
             await enviarViaPHP(
@@ -319,7 +341,6 @@ async function processarItem(arquivo) {
             );
         } catch {}
 
-        // Mover para processados mesmo com erro (evitar loop)
         try {
             fs.renameSync(arquivo, path.join(PROCESSADOS_DIR, 'ERRO_' + nomeArquivo));
         } catch {}
@@ -336,7 +357,7 @@ function verificarFila() {
     try {
         const arquivos = fs.readdirSync(FILA_DIR)
             .filter(f => f.endsWith('.json'))
-            .sort(); // processar na ordem de criacao
+            .sort();
 
         if (arquivos.length > 0) {
             processarItem(path.join(FILA_DIR, arquivos[0]));
@@ -349,26 +370,47 @@ function verificarFila() {
 }
 
 // ========================================
+// TESTE INICIAL DO CLI
+// ========================================
+
+async function testarCLI() {
+    log('teste', 'Testando Claude CLI...');
+    try {
+        const resultado = await executarClaude('Responda apenas: OK', '', null);
+        log('teste', `CLI funcionando! Resposta: "${resultado.texto.substring(0, 50)}"`);
+        return true;
+    } catch (erro) {
+        log('teste', `CLI FALHOU: ${erro.message}`);
+        return false;
+    }
+}
+
+// ========================================
 // INICIALIZACAO
 // ========================================
 
 log('worker', '========================================');
 log('worker', 'ASSISTENTE IA PESSOAL - Worker Node.js');
+log('worker', `HOME: ${process.env.HOME}`);
 log('worker', `Fila: ${FILA_DIR}`);
-log('worker', `Poll: ${INTERVALO_POLL_MS}ms`);
-log('worker', `Timeout CLI: ${TIMEOUT_MS}ms`);
+log('worker', `Timeout: ${TIMEOUT_MS}ms`);
 log('worker', `Supabase: ${SUPABASE_URL ? 'configurado' : 'AUSENTE'}`);
 log('worker', '========================================');
 
 // Garantir que diretorios existem
-if (!fs.existsSync(FILA_DIR)) fs.mkdirSync(FILA_DIR, { recursive: true });
-if (!fs.existsSync(PROCESSADOS_DIR)) fs.mkdirSync(PROCESSADOS_DIR, { recursive: true });
-if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
+[FILA_DIR, PROCESSADOS_DIR, TEMP_DIR].forEach(d => {
+    if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+});
 
-// Poll a cada 2 segundos (mais robusto que fs.watch em containers)
-setInterval(verificarFila, INTERVALO_POLL_MS);
+// Testar CLI antes de iniciar o poll
+testarCLI().then((ok) => {
+    if (ok) {
+        log('worker', 'CLI OK - iniciando monitoramento da fila');
+    } else {
+        log('worker', 'CLI FALHOU - iniciando mesmo assim (pode ser auth pendente)');
+    }
 
-// Verificar imediatamente
-verificarFila();
-
-log('worker', 'Monitorando fila...');
+    setInterval(verificarFila, INTERVALO_POLL_MS);
+    verificarFila();
+    log('worker', 'Monitorando fila...');
+});
