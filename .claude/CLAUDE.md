@@ -136,7 +136,8 @@ Armazenado na tabela `assistente_configs`, chave `mapa_topicos`:
 | `/ferramentas` | Lista ferramentas disponiveis |
 | `/mapear <slug>` | Mapeia o topico atual a uma ferramenta |
 | `/desmapear` | Remove mapeamento do topico (volta para geral) |
-| `/topicos` | Mostra todos os mapeamentos ativos |
+| `/mapeamentos` | Mostra todos os mapeamentos ativos |
+| `/reset` | Encerra sessao ativa do topico (proxima msg cria nova) |
 
 ### Fluxo
 1. Webhook recebe mensagem com chat_id + thread_id
