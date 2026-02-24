@@ -75,6 +75,16 @@ $sessaoKey = $threadId ? $chatId . ':' . $threadId : $chatId;
 // Detectar ferramenta pelo mapeamento do topico
 $ferramenta = detectarFerramenta($chatId, $threadId);
 
+// Enriquecer mensagem com dados de Instagram (se tiver links + ferramenta compativel)
+$textoEnriquecido = $texto;
+if ($ferramenta === 'instagram-replicar') {
+    $linksInsta = detectarLinksInstagram($texto);
+    if (!empty($linksInsta)) {
+        $textoEnriquecido = enriquecerMensagemInstagram($texto);
+        logAssistente('info', 'webhook-telegram', 'Instagram: ' . count($linksInsta) . ' link(s) enriquecido(s)');
+    }
+}
+
 // Indicar que esta processando
 telegramDigitando($chatId, $threadId);
 
@@ -89,13 +99,13 @@ salvarMensagem($sessao['id'], 'telegram', $sessaoKey, 'recebida', $texto, [
     'ferramenta' => $ferramenta,
 ]);
 
-// Criar item na fila para o worker processar
+// Criar item na fila para o worker processar (mensagem enriquecida com dados de scraping)
 criarItemFila([
     'canal' => 'telegram',
     'chat_id' => $chatId,
     'thread_id' => $threadId,
     'ferramenta' => $ferramenta,
-    'mensagem' => $texto,
+    'mensagem' => $textoEnriquecido,
     'sessao_id' => $sessao['id'],
     'claude_session_id' => $sessao['claude_session_id'],
     'message_id' => $messageId,

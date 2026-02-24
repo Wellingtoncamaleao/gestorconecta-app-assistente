@@ -58,6 +58,7 @@ EVOLUTION_API_URL=https://evolution.gestorconecta.com.br
 EVOLUTION_API_KEY=(pendente)
 EVOLUTION_INSTANCIA=assistente
 WHATSAPP_CHAT_IDS=(pendente)
+FACEBOOK_APP_TOKEN=APP_ID|APP_SECRET
 ```
 
 ## Banco de Dados (Supabase)
@@ -151,6 +152,15 @@ Armazenado na tabela `assistente_configs`, chave `mapa_topicos`:
 2. Registrar em `tools/ferramentas.json`
 3. Commit + push → Easypanel rebuilda
 4. No Telegram, criar topico e usar `/mapear slug`
+
+### Scraper Instagram (ferramenta instagram-replicar)
+Quando usuario envia link de Instagram no topico mapeado para `instagram-replicar`:
+1. PHP detecta link via regex (post/reel/tv)
+2. Busca dados via Facebook Graph API oEmbed (precisa `FACEBOOK_APP_TOKEN`)
+3. Fallback: scraping meta tags OG da pagina
+4. Enriquece mensagem com autor, legenda, hashtags, thumbnail
+5. Claude recebe dados formatados + mensagem original
+Requer: Facebook Developer App (gratis) → App ID|App Secret como env var
 
 ## Fluxo de Mensagem (Telegram)
 

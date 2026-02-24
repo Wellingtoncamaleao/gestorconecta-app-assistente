@@ -18,6 +18,10 @@ define('EVOLUTION_API_KEY', getenv('EVOLUTION_API_KEY') ?: '');
 define('EVOLUTION_INSTANCIA', getenv('EVOLUTION_INSTANCIA') ?: 'assistente');
 define('WHATSAPP_CHAT_IDS', json_decode(getenv('WHATSAPP_CHAT_IDS') ?: '[]', true) ?: []);
 
+// Facebook/Meta (oEmbed Instagram)
+// Token: APP_ID|APP_SECRET (criar em developers.facebook.com)
+define('FACEBOOK_APP_TOKEN', getenv('FACEBOOK_APP_TOKEN') ?: '');
+
 // Fila
 define('FILA_DIR', '/var/assistente/fila');
 define('LOGS_DIR', '/var/assistente/logs');

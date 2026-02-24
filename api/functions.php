@@ -362,6 +362,220 @@ function listarFerramentas() {
 }
 
 // ========================================
+// INSTAGRAM SCRAPER (oEmbed + Meta OG)
+// ========================================
+
+/**
+ * Detecta links de Instagram em um texto.
+ * Retorna array de URLs encontradas.
+ */
+function detectarLinksInstagram($texto) {
+    $pattern = '#https?://(?:www\.)?instagram\.com/(?:p|reel|reels|tv)/[\w\-]+/?(?:\?[^\s]*)?#i';
+    preg_match_all($pattern, $texto, $matches);
+    return $matches[0] ?? [];
+}
+
+/**
+ * Busca dados de um post do Instagram.
+ * Metodo 1: Facebook Graph API oEmbed (requer FACEBOOK_APP_TOKEN)
+ * Metodo 2: Fallback com meta tags OG (scraping)
+ * Retorna array com dados extraidos ou null se falhar.
+ */
+function buscarDadosInstagram($url) {
+    $dados = [
+        'url' => $url,
+        'tipo' => detectarTipoInstagram($url),
+        'autor' => null,
+        'autor_url' => null,
+        'legenda' => null,
+        'thumbnail_url' => null,
+    ];
+
+    // Limpar parametros de tracking da URL para o oEmbed
+    $urlLimpa = preg_replace('/[?&](igsh|utm_\w+)=[^&]*/', '', $url);
+    $urlLimpa = rtrim($urlLimpa, '?&');
+
+    // 1. Metodo principal: Facebook Graph API oEmbed (precisa de token)
+    if (defined('FACEBOOK_APP_TOKEN') && FACEBOOK_APP_TOKEN) {
+        $oembedUrl = 'https://graph.facebook.com/v21.0/instagram_oembed'
+            . '?url=' . urlencode($urlLimpa)
+            . '&access_token=' . urlencode(FACEBOOK_APP_TOKEN)
+            . '&omitscript=true';
+
+        $oembedDados = fetchUrl($oembedUrl);
+
+        if ($oembedDados) {
+            $oembed = json_decode($oembedDados, true);
+            if ($oembed && !isset($oembed['error'])) {
+                $dados['autor'] = $oembed['author_name'] ?? null;
+                $dados['autor_url'] = $oembed['author_url'] ?? null;
+                $dados['legenda'] = $oembed['title'] ?? null;
+                $dados['thumbnail_url'] = $oembed['thumbnail_url'] ?? null;
+                $dados['thumbnail_w'] = $oembed['thumbnail_width'] ?? null;
+                $dados['thumbnail_h'] = $oembed['thumbnail_height'] ?? null;
+
+                // Extrair hashtags da legenda (oEmbed retorna legenda completa)
+                if ($dados['legenda']) {
+                    preg_match_all('/#[\w\p{L}]+/u', $dados['legenda'], $hashMatches);
+                    $dados['hashtags'] = $hashMatches[0] ?? [];
+                }
+
+                logAssistente('info', 'instagram', 'oEmbed Graph API OK', [
+                    'autor' => $dados['autor'],
+                    'legenda_len' => mb_strlen($dados['legenda'] ?? ''),
+                ]);
+            } else {
+                $erro = $oembed['error']['message'] ?? 'desconhecido';
+                logAssistente('aviso', 'instagram', 'oEmbed Graph API falhou: ' . $erro);
+            }
+        }
+    }
+
+    // 2. Fallback: meta tags OG (scraping da pagina)
+    if (!$dados['autor'] && !$dados['legenda']) {
+        $html = fetchUrl($urlLimpa);
+        if ($html) {
+            $ogDesc = extrairMetaTag($html, 'og:description');
+            if ($ogDesc) {
+                $dados['legenda'] = $ogDesc;
+            }
+
+            $ogImage = extrairMetaTag($html, 'og:image');
+            if ($ogImage) {
+                $dados['thumbnail_url'] = $ogImage;
+            }
+
+            $ogTitle = extrairMetaTag($html, 'og:title');
+            if ($ogTitle) {
+                // og:title geralmente tem "Fulano no Instagram: ..."
+                if (preg_match('/^(.+?)\s+(?:no|on)\s+Instagram/i', $ogTitle, $m)) {
+                    $dados['autor'] = trim($m[1]);
+                }
+            }
+
+            // Detectar carrossel/slides pelo HTML
+            if (stripos($html, 'sidecar') !== false || stripos($html, 'GraphSidecar') !== false) {
+                $dados['tipo'] = 'carrossel';
+            }
+
+            if ($dados['autor'] || $dados['legenda']) {
+                logAssistente('info', 'instagram', 'Fallback OG tags OK');
+            }
+        }
+    }
+
+    // Se nao conseguiu nada util, retornar null
+    if (!$dados['autor'] && !$dados['legenda']) {
+        logAssistente('aviso', 'instagram', 'Nenhum dado extraido de: ' . $url);
+        return null;
+    }
+
+    return $dados;
+}
+
+/**
+ * Detecta o tipo de post pela URL.
+ */
+function detectarTipoInstagram($url) {
+    if (preg_match('#/reel(s)?/#i', $url)) return 'reel';
+    if (preg_match('#/tv/#i', $url)) return 'igtv';
+    return 'post'; // /p/ — pode ser foto, carrossel, ou video
+}
+
+/**
+ * Extrai uma meta tag pelo property (og:xxx).
+ */
+function extrairMetaTag($html, $property) {
+    // Tentar property="..."
+    $pattern = '/<meta\s+[^>]*property=["\']' . preg_quote($property, '/') . '["\']\s+[^>]*content=["\']([^"\']*)["\'][^>]*>/i';
+    if (preg_match($pattern, $html, $m)) return html_entity_decode($m[1], ENT_QUOTES, 'UTF-8');
+
+    // Tentar content="..." property="..." (ordem invertida)
+    $pattern2 = '/<meta\s+[^>]*content=["\']([^"\']*)["\'][^>]*property=["\']' . preg_quote($property, '/') . '["\']/i';
+    if (preg_match($pattern2, $html, $m)) return html_entity_decode($m[1], ENT_QUOTES, 'UTF-8');
+
+    return null;
+}
+
+/**
+ * Fetch simples de URL via cURL.
+ */
+function fetchUrl($url, $timeout = 10) {
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => $timeout,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS => 3,
+        CURLOPT_USERAGENT => 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+        CURLOPT_HTTPHEADER => [
+            'Accept: text/html,application/json',
+            'Accept-Language: pt-BR,pt;q=0.9',
+        ],
+    ]);
+    $resposta = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    return ($httpCode >= 200 && $httpCode < 400) ? $resposta : null;
+}
+
+/**
+ * Monta texto descritivo de um post do Instagram para enviar ao Claude.
+ */
+function montarDescricaoInstagram($dados) {
+    $partes = [];
+    $partes[] = 'POST ORIGINAL DO INSTAGRAM';
+    $partes[] = 'URL: ' . $dados['url'];
+    $partes[] = 'Tipo: ' . ($dados['tipo'] ?? 'post');
+
+    if ($dados['autor']) {
+        $partes[] = 'Autor: ' . $dados['autor'];
+    }
+    if ($dados['autor_url']) {
+        $partes[] = 'Perfil: ' . $dados['autor_url'];
+    }
+    if ($dados['legenda']) {
+        $partes[] = 'Legenda/descricao: ' . $dados['legenda'];
+    }
+    if (!empty($dados['hashtags'])) {
+        $partes[] = 'Hashtags originais: ' . implode(' ', $dados['hashtags']);
+    }
+    if ($dados['thumbnail_url']) {
+        $dimensao = '';
+        if (!empty($dados['thumbnail_w']) && !empty($dados['thumbnail_h'])) {
+            $dimensao = ' (' . $dados['thumbnail_w'] . 'x' . $dados['thumbnail_h'] . ')';
+        }
+        $partes[] = 'Thumbnail: ' . $dados['thumbnail_url'] . $dimensao;
+    }
+
+    return implode("\n", $partes);
+}
+
+/**
+ * Enriquece a mensagem do usuario se contem links de Instagram.
+ * Retorna a mensagem original enriquecida com dados dos posts.
+ */
+function enriquecerMensagemInstagram($texto) {
+    $links = detectarLinksInstagram($texto);
+    if (empty($links)) return $texto;
+
+    $extras = [];
+    foreach ($links as $link) {
+        $dados = buscarDadosInstagram($link);
+        if ($dados) {
+            $extras[] = montarDescricaoInstagram($dados);
+        } else {
+            $extras[] = "📌 LINK INSTAGRAM (nao foi possivel extrair dados): $link";
+        }
+    }
+
+    if (empty($extras)) return $texto;
+
+    return $texto . "\n\n---\n" . implode("\n\n---\n", $extras);
+}
+
+// ========================================
 // COMANDOS INTERNOS
 // ========================================
 
