@@ -629,16 +629,26 @@ function processarComando($texto, $chatId, $threadId) {
     if ($texto === '/reset') {
         $sessaoKey = $threadId ? $chatId . ':' . $threadId : $chatId;
         // Encerrar sessoes ativas para este chat/topico
-        $resultado = supabaseFetch(
-            'assistente_sessoes?canal=eq.telegram&chat_id=eq.' . $sessaoKey . '&status=eq.ativa',
-            [
-                'metodo' => 'PATCH',
-                'corpo' => ['status' => 'encerrada', 'atualizado_em' => date('c')]
-            ]
-        );
-        $msg = $resultado['ok']
-            ? "Sessao resetada. Proxima mensagem inicia conversa nova."
-            : "Erro ao resetar sessao.";
+        $filtro = 'assistente_sessoes?canal=eq.telegram'
+            . '&chat_id=eq.' . urlencode($sessaoKey)
+            . '&status=eq.ativa';
+        $resultado = supabaseFetch($filtro, [
+            'metodo' => 'PATCH',
+            'corpo' => ['status' => 'encerrada', 'atualizado_em' => date('c')]
+        ]);
+        if ($resultado['ok']) {
+            $qtd = is_array($resultado['dados']) ? count($resultado['dados']) : 0;
+            $msg = $qtd > 0
+                ? "Sessao resetada ($qtd encerrada). Proxima mensagem inicia conversa nova."
+                : "Nenhuma sessao ativa encontrada. Proxima mensagem ja inicia conversa nova.";
+        } else {
+            $msg = "Erro ao resetar (HTTP {$resultado['status']}). Tente novamente.";
+            logAssistente('erro', 'reset', 'Falha PATCH sessao', [
+                'sessaoKey' => $sessaoKey,
+                'status' => $resultado['status'],
+                'resposta' => $resultado['dados'],
+            ]);
+        }
         enviarTelegram($chatId, $msg, $extras);
         return true;
     }
