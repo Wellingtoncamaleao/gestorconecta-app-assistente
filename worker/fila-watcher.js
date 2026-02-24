@@ -110,23 +110,16 @@ async function carregarHistorico(sessaoId) {
 
 function executarClaude(mensagem, contexto, claudeSessionId) {
     return new Promise((resolve, reject) => {
-        // Salvar contexto em arquivo temporario (evita limite de tamanho de argumento)
-        const contextFile = path.join(TEMP_DIR, `ctx-${Date.now()}.txt`);
-        if (contexto) {
-            fs.writeFileSync(contextFile, contexto, 'utf8');
-        }
+        // Montar prompt completo: contexto + mensagem do usuario
+        const promptCompleto = contexto
+            ? `${contexto}\n\n---\nMensagem do usuario:\n${mensagem}`
+            : mensagem;
 
         const args = [
-            '-p', mensagem,
+            '-p', promptCompleto,
             '--output-format', 'json',
-            '--max-turns', String(MAX_TURNS),
-            '--dangerously-skip-permissions',
+            '--max-turns', '1',
         ];
-
-        // Usar --system-prompt com o contexto completo
-        if (contexto) {
-            args.push('--system-prompt', contexto);
-        }
 
         // Resumir sessao anterior
         if (claudeSessionId) {
@@ -139,22 +132,22 @@ function executarClaude(mensagem, contexto, claudeSessionId) {
             msgLen: mensagem.length,
             ctxLen: contexto ? contexto.length : 0,
             resume: claudeSessionId || 'nova',
+            argsCount: args.length,
         });
 
         const proc = execFile('claude', args, {
             timeout: TIMEOUT_MS,
             maxBuffer: 10 * 1024 * 1024, // 10MB
             env: { ...process.env },
+            cwd: '/var/www/html',
         }, (erro, stdout, stderr) => {
             const tempoMs = Date.now() - inicio;
 
-            // Limpar arquivo temporario
-            try { fs.unlinkSync(contextFile); } catch {}
-
             if (erro) {
                 log('claude', `ERRO (${tempoMs}ms): ${erro.message}`);
-                if (stderr) log('claude', `stderr: ${stderr.substring(0, 500)}`);
-                if (stdout) log('claude', `stdout: ${stdout.substring(0, 500)}`);
+                if (erro.killed) log('claude', 'Processo foi morto (timeout?)');
+                if (stderr) log('claude', `stderr (primeiros 500): ${stderr.substring(0, 500)}`);
+                if (stdout) log('claude', `stdout (primeiros 500): ${stdout.substring(0, 500)}`);
                 reject(erro);
                 return;
             }
