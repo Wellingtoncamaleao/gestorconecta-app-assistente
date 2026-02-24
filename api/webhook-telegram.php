@@ -18,6 +18,22 @@ if (!$payload) {
     responderErro('Payload invalido', 400);
 }
 
+// Deduplicacao: ignorar update_id ja processado
+$updateId = $payload['update_id'] ?? null;
+if ($updateId) {
+    $dedup_dir = '/var/assistente/dedup';
+    if (!is_dir($dedup_dir)) mkdir($dedup_dir, 0755, true);
+    $dedup_file = $dedup_dir . '/' . $updateId;
+    if (file_exists($dedup_file)) {
+        responderJson(['ok' => true]); // ja processado
+    }
+    file_put_contents($dedup_file, '1');
+    // Limpar dedup antigos (mais de 1h)
+    foreach (glob($dedup_dir . '/*') as $f) {
+        if (filemtime($f) < time() - 3600) unlink($f);
+    }
+}
+
 // Extrair mensagem
 $mensagem = $payload['message'] ?? $payload['edited_message'] ?? null;
 if (!$mensagem) {
