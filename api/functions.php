@@ -625,5 +625,23 @@ function processarComando($texto, $chatId, $threadId) {
         return true;
     }
 
+    // /reset — limpar sessao do topico/chat atual
+    if ($texto === '/reset') {
+        $sessaoKey = $threadId ? $chatId . ':' . $threadId : $chatId;
+        // Encerrar sessoes ativas para este chat/topico
+        $resultado = supabaseFetch(
+            'assistente_sessoes?canal=eq.telegram&chat_id=eq.' . $sessaoKey . '&status=eq.ativa',
+            [
+                'metodo' => 'PATCH',
+                'corpo' => ['status' => 'encerrada', 'atualizado_em' => date('c')]
+            ]
+        );
+        $msg = $resultado['ok']
+            ? "Sessao resetada. Proxima mensagem inicia conversa nova."
+            : "Erro ao resetar sessao.";
+        enviarTelegram($chatId, $msg, $extras);
+        return true;
+    }
+
     return false; // nao e comando
 }
