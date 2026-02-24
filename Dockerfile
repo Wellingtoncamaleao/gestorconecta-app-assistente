@@ -1,10 +1,12 @@
 FROM php:8.4-fpm-bookworm
 
-# Dependencias do sistema
+# Dependencias do sistema + GD para processamento de imagem
 RUN apt-get update && apt-get install -y \
     nginx supervisor curl git jq procps \
     libcurl4-openssl-dev \
-    && docker-php-ext-install curl \
+    libfreetype6-dev libjpeg62-turbo-dev libpng-dev libwebp-dev \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp \
+    && docker-php-ext-install curl gd \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js 22
@@ -25,7 +27,8 @@ RUN mkdir -p /var/assistente/fila/processados \
     /var/assistente/dedup \
     /var/assistente/logs \
     /workspace \
-    /tmp/assistente
+    /tmp/assistente \
+    /tmp/assistente/media
 
 # Configs do servidor
 COPY nginx.conf /etc/nginx/sites-available/default

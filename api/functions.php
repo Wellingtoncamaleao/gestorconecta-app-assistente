@@ -576,6 +576,197 @@ function enriquecerMensagemInstagram($texto) {
 }
 
 // ========================================
+// MIDIA INSTAGRAM (download + marca dagua)
+// ========================================
+
+define('MEDIA_DIR', '/tmp/assistente/media');
+define('MARCA_DAGUA_TEXTO', '@wellington_camaleao');
+
+/**
+ * Baixa a imagem de um post do Instagram.
+ * Usa og:image (thumbnail) ou thumbnail_url do oEmbed.
+ * Retorna path do arquivo local ou null.
+ */
+function baixarImagemInstagram($dados) {
+    $imageUrl = $dados['thumbnail_url'] ?? null;
+    if (!$imageUrl) return null;
+
+    if (!is_dir(MEDIA_DIR)) mkdir(MEDIA_DIR, 0775, true);
+
+    $hash = md5($dados['url'] . time());
+    $tempPath = MEDIA_DIR . '/' . $hash . '_original';
+
+    $ch = curl_init($imageUrl);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 15,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS => 5,
+        CURLOPT_USERAGENT => 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+    ]);
+    $imagemBinario = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+    curl_close($ch);
+
+    if ($httpCode < 200 || $httpCode >= 400 || !$imagemBinario) {
+        logAssistente('aviso', 'midia', 'Falha download imagem: HTTP ' . $httpCode);
+        return null;
+    }
+
+    // Determinar extensao pela content-type
+    $ext = 'jpg';
+    if (strpos($contentType, 'png') !== false) $ext = 'png';
+    elseif (strpos($contentType, 'webp') !== false) $ext = 'webp';
+
+    $finalPath = MEDIA_DIR . '/' . $hash . '.' . $ext;
+    file_put_contents($finalPath, $imagemBinario);
+
+    logAssistente('info', 'midia', 'Imagem baixada: ' . strlen($imagemBinario) . ' bytes', [
+        'ext' => $ext,
+        'path' => $finalPath,
+    ]);
+
+    return $finalPath;
+}
+
+/**
+ * Aplica marca dagua de texto em uma imagem usando GD.
+ * Retorna path da imagem processada ou null.
+ */
+function aplicarMarcaDagua($imagemPath, $texto = null) {
+    if (!$texto) $texto = MARCA_DAGUA_TEXTO;
+    if (!file_exists($imagemPath)) return null;
+    if (!function_exists('imagecreatefromjpeg')) {
+        logAssistente('aviso', 'midia', 'GD nao disponivel, enviando sem marca dagua');
+        return $imagemPath; // retorna original se GD nao instalado
+    }
+
+    $ext = strtolower(pathinfo($imagemPath, PATHINFO_EXTENSION));
+
+    // Carregar imagem conforme formato
+    switch ($ext) {
+        case 'png':  $img = @imagecreatefrompng($imagemPath); break;
+        case 'webp': $img = @imagecreatefromwebp($imagemPath); break;
+        default:     $img = @imagecreatefromjpeg($imagemPath); break;
+    }
+
+    if (!$img) {
+        logAssistente('aviso', 'midia', 'Falha ao carregar imagem: ' . $imagemPath);
+        return $imagemPath;
+    }
+
+    $largura = imagesx($img);
+    $altura = imagesy($img);
+
+    // Tamanho da fonte proporcional a imagem (3-5% da largura)
+    $tamanhoFonte = max(12, (int)($largura * 0.035));
+
+    // Usar fonte embutida do GD (sem precisar de .ttf)
+    // Para texto proporcional, usar imagestring com fonte 5 (maior embutida)
+    // Melhor: usar imagettftext se tiver fonte, senao fallback
+    $fonteInterna = 5; // Maior fonte embutida do GD
+    $charW = imagefontwidth($fonteInterna);
+    $charH = imagefontheight($fonteInterna);
+    $textoW = $charW * strlen($texto);
+    $textoH = $charH;
+
+    // Posicao: canto inferior direito com margem
+    $margem = (int)($largura * 0.03);
+    $x = $largura - $textoW - $margem;
+    $y = $altura - $textoH - $margem;
+
+    // Fundo semi-transparente
+    $bgColor = imagecolorallocatealpha($img, 0, 0, 0, 60); // preto 50% transparente
+    imagefilledrectangle($img, $x - 8, $y - 4, $x + $textoW + 8, $y + $textoH + 4, $bgColor);
+
+    // Texto branco
+    $textColor = imagecolorallocate($img, 255, 255, 255);
+    imagestring($img, $fonteInterna, $x, $y, $texto, $textColor);
+
+    // Salvar como JPEG (boa compressao para Telegram)
+    $outputPath = preg_replace('/\.\w+$/', '_marca.jpg', $imagemPath);
+    imagejpeg($img, $outputPath, 92);
+    imagedestroy($img);
+
+    logAssistente('info', 'midia', 'Marca dagua aplicada', ['output' => $outputPath]);
+    return $outputPath;
+}
+
+/**
+ * Envia foto via Telegram Bot API (sendPhoto com multipart upload).
+ */
+function telegramEnviarFoto($chatId, $fotoPath, $legenda = '', $extras = []) {
+    if (!file_exists($fotoPath)) {
+        logAssistente('aviso', 'telegram', 'Foto nao encontrada: ' . $fotoPath);
+        return false;
+    }
+
+    $url = 'https://api.telegram.org/bot' . TELEGRAM_BOT_TOKEN . '/sendPhoto';
+
+    $payload = array_merge([
+        'chat_id' => $chatId,
+        'photo' => new CURLFile($fotoPath, 'image/jpeg', 'instagram.jpg'),
+    ], $extras);
+
+    if ($legenda) {
+        $payload['caption'] = mb_substr($legenda, 0, 1024); // Telegram max caption
+    }
+
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => $payload, // multipart quando tem CURLFile
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 30,
+    ]);
+    $resultado = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    $resposta = json_decode($resultado, true);
+    if (!($resposta['ok'] ?? false)) {
+        logAssistente('aviso', 'telegram', 'Falha sendPhoto: HTTP ' . $httpCode, [
+            'erro' => $resposta['description'] ?? $resultado,
+        ]);
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * Processa midia de um post Instagram: baixa imagem + aplica marca dagua.
+ * Retorna path da imagem processada ou null.
+ */
+function processarMidiaInstagram($url) {
+    $dados = buscarDadosInstagram($url);
+    if (!$dados) return null;
+
+    $imagemPath = baixarImagemInstagram($dados);
+    if (!$imagemPath) return null;
+
+    $processada = aplicarMarcaDagua($imagemPath);
+
+    // Limpar original se gerou arquivo com marca
+    if ($processada !== $imagemPath && file_exists($imagemPath)) {
+        @unlink($imagemPath);
+    }
+
+    return $processada;
+}
+
+/**
+ * Limpa arquivos de midia antigos (mais de 1h).
+ */
+function limparMidiaAntiga() {
+    if (!is_dir(MEDIA_DIR)) return;
+    foreach (glob(MEDIA_DIR . '/*') as $f) {
+        if (filemtime($f) < time() - 3600) @unlink($f);
+    }
+}
+
+// ========================================
 // COMANDOS INTERNOS
 // ========================================
 

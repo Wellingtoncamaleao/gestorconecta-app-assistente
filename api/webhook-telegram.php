@@ -77,11 +77,23 @@ $ferramenta = detectarFerramenta($chatId, $threadId);
 
 // Enriquecer mensagem com dados de Instagram (se tiver links + ferramenta compativel)
 $textoEnriquecido = $texto;
+$mediaPath = null;
 if ($ferramenta === 'instagram-replicar') {
     $linksInsta = detectarLinksInstagram($texto);
     if (!empty($linksInsta)) {
         $textoEnriquecido = enriquecerMensagemInstagram($texto);
         logAssistente('info', 'webhook-telegram', 'Instagram: ' . count($linksInsta) . ' link(s) enriquecido(s)');
+
+        // Baixar imagem + aplicar marca dagua + enviar ao Telegram
+        $mediaPath = processarMidiaInstagram($linksInsta[0]);
+        if ($mediaPath) {
+            $extrasMedia = [];
+            if ($threadId) $extrasMedia['message_thread_id'] = (int)$threadId;
+            telegramEnviarFoto($chatId, $mediaPath, MARCA_DAGUA_TEXTO, $extrasMedia);
+            logAssistente('info', 'webhook-telegram', 'Imagem com marca dagua enviada');
+            // Limpar midia antiga (1h+)
+            limparMidiaAntiga();
+        }
     }
 }
 
