@@ -15,7 +15,7 @@ const PROMPTS_DIR = '/var/www/html/prompts';
 const TEMP_DIR = '/tmp/assistente';
 
 // Config
-const TIMEOUT_MS = 180000; // 3 minutos
+const TIMEOUT_MS = 300000; // 5 minutos
 const INTERVALO_POLL_MS = 2000;
 
 // Supabase config
@@ -118,7 +118,11 @@ function executarClaude(mensagem, contexto, claudeSessionId) {
         fs.writeFileSync(promptFile, promptCompleto, 'utf8');
 
         // Construir comando shell: ler arquivo e passar via -p
-        const args = ['--output-format', 'json', '--max-turns', '3'];
+        const args = [
+            '--dangerously-skip-permissions',
+            '--output-format', 'json',
+            '--max-turns', '10',
+        ];
 
         if (claudeSessionId) {
             args.push('--resume', claudeSessionId);
@@ -134,8 +138,8 @@ function executarClaude(mensagem, contexto, claudeSessionId) {
 
         // Usar spawn com stdin pipe
         const proc = spawn('claude', args, {
-            env: { ...process.env, HOME: '/root' },
-            cwd: '/var/www/html',
+            env: { ...process.env, HOME: '/home/claude-user' },
+            cwd: '/workspace',
             stdio: ['pipe', 'pipe', 'pipe'],
         });
 
@@ -181,12 +185,26 @@ function executarClaude(mensagem, contexto, claudeSessionId) {
 
             try {
                 const resultado = JSON.parse(stdout);
+
+                // Extrair texto da resposta (result pode ser vazio em erros)
+                let texto = '';
+                if (resultado.result) {
+                    texto = resultado.result;
+                } else if (resultado.subtype === 'errorMaxTurns') {
+                    texto = 'Desculpe, a tarefa atingiu o limite de etapas. Tente dividir em partes menores.';
+                } else if (resultado.isError) {
+                    texto = `Erro ao processar: ${resultado.subtype || 'desconhecido'}`;
+                } else {
+                    texto = 'Tarefa concluida, mas sem texto de resposta.';
+                }
+
                 resolve({
-                    texto: resultado.result || resultado.text || stdout,
-                    sessionId: resultado.session_id || null,
+                    texto,
+                    sessionId: resultado.sessionId || null,
                     modelo: resultado.modelUsage ? Object.keys(resultado.modelUsage)[0] : 'desconhecido',
-                    tokensEntrada: resultado.usage?.input_tokens || 0,
-                    tokensSaida: resultado.usage?.output_tokens || 0,
+                    tokensEntrada: resultado.usage?.inputTokens || 0,
+                    tokensSaida: resultado.usage?.outputTokens || 0,
+                    custoUSD: resultado.totalCostUSD || 0,
                     tempoMs,
                 });
             } catch {
@@ -197,6 +215,7 @@ function executarClaude(mensagem, contexto, claudeSessionId) {
                     modelo: 'desconhecido',
                     tokensEntrada: 0,
                     tokensSaida: 0,
+                    custoUSD: 0,
                     tempoMs,
                 });
             }

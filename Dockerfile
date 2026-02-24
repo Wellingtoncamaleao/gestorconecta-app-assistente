@@ -15,14 +15,23 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 # Claude Code CLI
 RUN npm install -g @anthropic-ai/claude-code
 
+# Usuario nao-root para Claude Code CLI (--dangerously-skip-permissions requer nao-root)
+RUN useradd -m -s /bin/bash claude-user \
+    && usermod -aG www-data claude-user
+
 # Diretorios de trabalho
 RUN mkdir -p /var/assistente/fila/processados \
     /var/assistente/sessoes \
-    /var/assistente/logs
+    /var/assistente/dedup \
+    /var/assistente/logs \
+    /workspace \
+    /tmp/assistente
 
 # Configs do servidor
 COPY nginx.conf /etc/nginx/sites-available/default
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Aplicacao
 COPY api/ /var/www/html/api/
@@ -34,10 +43,12 @@ COPY worker/ /var/www/worker/
 WORKDIR /var/www/worker
 RUN npm install --production
 
-# Permissoes
-RUN chown -R www-data:www-data /var/www/html /var/assistente
+# Permissoes: www-data para PHP, claude-user para worker/CLI
+RUN chown -R www-data:www-data /var/www/html \
+    && chown -R claude-user:claude-user /var/assistente /workspace /tmp/assistente /var/www/worker \
+    && chmod -R 775 /var/assistente
 
 WORKDIR /var/www/html
 EXPOSE 80
 
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+CMD ["/entrypoint.sh"]
