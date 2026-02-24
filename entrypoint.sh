@@ -2,9 +2,10 @@
 # ASSISTENTE - Entrypoint
 # Corrige permissoes dos volumes montados e inicia supervisord
 
-# Volumes montados vem com dono root - corrigir para claude-user
+# Volumes montados vem com dono root - corrigir permissoes
+# claude-user:www-data para que PHP (www-data) possa escrever na fila
 chown -R claude-user:claude-user /home/claude-user/.claude 2>/dev/null
-chown -R claude-user:claude-user /var/assistente 2>/dev/null
+chown -R claude-user:www-data /var/assistente 2>/dev/null
 chmod -R 775 /var/assistente
 
 # Garantir que diretorios existem

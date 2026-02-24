@@ -44,8 +44,10 @@ WORKDIR /var/www/worker
 RUN npm install --production
 
 # Permissoes: www-data para PHP, claude-user para worker/CLI
+# /var/assistente usa grupo www-data para PHP poder escrever na fila
 RUN chown -R www-data:www-data /var/www/html \
-    && chown -R claude-user:claude-user /var/assistente /workspace /tmp/assistente /var/www/worker \
+    && chown -R claude-user:www-data /var/assistente /workspace /tmp/assistente \
+    && chown -R claude-user:claude-user /var/www/worker \
     && chmod -R 775 /var/assistente
 
 WORKDIR /var/www/html
