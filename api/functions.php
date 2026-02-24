@@ -628,25 +628,29 @@ function processarComando($texto, $chatId, $threadId) {
     // /reset — limpar sessao do topico/chat atual
     if ($texto === '/reset') {
         $sessaoKey = $threadId ? $chatId . ':' . $threadId : $chatId;
-        // Encerrar sessoes ativas para este chat/topico
-        $filtro = 'assistente_sessoes?canal=eq.telegram'
-            . '&chat_id=eq.' . urlencode($sessaoKey)
-            . '&status=eq.ativa';
-        $resultado = supabaseFetch($filtro, [
-            'metodo' => 'PATCH',
-            'corpo' => ['status' => 'encerrada', 'atualizado_em' => date('c')]
-        ]);
-        if ($resultado['ok']) {
-            $qtd = is_array($resultado['dados']) ? count($resultado['dados']) : 0;
-            $msg = $qtd > 0
-                ? "Sessao resetada ($qtd encerrada). Proxima mensagem inicia conversa nova."
-                : "Nenhuma sessao ativa encontrada. Proxima mensagem ja inicia conversa nova.";
+        // 1. Buscar sessoes ativas por GET
+        $busca = supabaseFetch(
+            'assistente_sessoes?canal=eq.telegram&chat_id=eq.' . urlencode($sessaoKey) . '&status=eq.ativa&select=id'
+        );
+        if ($busca['ok'] && !empty($busca['dados'])) {
+            // 2. Encerrar cada sessao pelo id (PATCH por UUID — confiavel)
+            $qtd = 0;
+            foreach ($busca['dados'] as $sessao) {
+                $patch = supabaseFetch('assistente_sessoes?id=eq.' . $sessao['id'], [
+                    'metodo' => 'PATCH',
+                    'corpo' => ['status' => 'encerrada', 'atualizado_em' => date('c')]
+                ]);
+                if ($patch['ok']) $qtd++;
+            }
+            $msg = "Sessao resetada ($qtd encerrada). Proxima mensagem inicia conversa nova.";
+        } elseif ($busca['ok']) {
+            $msg = "Nenhuma sessao ativa encontrada. Proxima mensagem ja inicia conversa nova.";
         } else {
-            $msg = "Erro ao resetar (HTTP {$resultado['status']}). Tente novamente.";
-            logAssistente('erro', 'reset', 'Falha PATCH sessao', [
+            $msg = "Erro ao buscar sessao (HTTP {$busca['status']}). Tente novamente.";
+            logAssistente('erro', 'reset', 'Falha GET sessao', [
                 'sessaoKey' => $sessaoKey,
-                'status' => $resultado['status'],
-                'resposta' => $resultado['dados'],
+                'status' => $busca['status'],
+                'resposta' => $busca['dados'],
             ]);
         }
         enviarTelegram($chatId, $msg, $extras);
