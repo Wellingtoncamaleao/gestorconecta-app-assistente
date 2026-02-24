@@ -44,12 +44,17 @@ $chatId = (string)($mensagem['chat']['id'] ?? '');
 $texto = $mensagem['text'] ?? '';
 $messageId = $mensagem['message_id'] ?? null;
 $nome = $mensagem['from']['first_name'] ?? 'Usuario';
+$threadId = isset($mensagem['message_thread_id']) ? (string)$mensagem['message_thread_id'] : null;
+$chatType = $mensagem['chat']['type'] ?? 'private';
 
-// Seguranca: whitelist
+// Seguranca: whitelist (aceita chat_id direto OU grupo)
 if (!in_array($chatId, TELEGRAM_CHAT_IDS)) {
-    logAssistente('aviso', 'webhook-telegram', 'Chat ID nao autorizado: ' . $chatId);
-    enviarTelegram($chatId, 'Acesso nao autorizado.');
-    responderJson(['ok' => true]);
+    // Em grupos, verificar se o remetente esta na whitelist
+    $userId = (string)($mensagem['from']['id'] ?? '');
+    if (!in_array($userId, TELEGRAM_CHAT_IDS)) {
+        logAssistente('aviso', 'webhook-telegram', 'Nao autorizado: chat=' . $chatId . ' user=' . $userId);
+        responderJson(['ok' => true]); // Ignorar silenciosamente em grupos
+    }
 }
 
 // Ignorar mensagens vazias (stickers, midia sem legenda, etc.)
@@ -57,15 +62,21 @@ if (empty(trim($texto))) {
     responderJson(['ok' => true]);
 }
 
+// Chave da sessao: chat_id + thread_id (para Topics)
+// Em chat direto: thread_id = null, sessao por chat_id
+// Em grupo com Topics: cada topico = sessao separada
+$sessaoKey = $threadId ? $chatId . ':' . $threadId : $chatId;
+
 // Indicar que esta processando
-telegramDigitando($chatId);
+telegramDigitando($chatId, $threadId);
 
 // Buscar ou criar sessao
-$sessao = buscarOuCriarSessao('telegram', $chatId);
+$sessao = buscarOuCriarSessao('telegram', $sessaoKey);
 
 // Salvar mensagem recebida
-salvarMensagem($sessao['id'], 'telegram', $chatId, 'recebida', $texto, [
+salvarMensagem($sessao['id'], 'telegram', $sessaoKey, 'recebida', $texto, [
     'telegram_message_id' => $messageId,
+    'thread_id' => $threadId,
     'nome' => $nome,
 ]);
 
@@ -73,6 +84,7 @@ salvarMensagem($sessao['id'], 'telegram', $chatId, 'recebida', $texto, [
 criarItemFila([
     'canal' => 'telegram',
     'chat_id' => $chatId,
+    'thread_id' => $threadId,
     'mensagem' => $texto,
     'sessao_id' => $sessao['id'],
     'claude_session_id' => $sessao['claude_session_id'],

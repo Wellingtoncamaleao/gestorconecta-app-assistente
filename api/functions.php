@@ -72,7 +72,6 @@ function enviarTelegram($chatId, $texto, $extras = []) {
         // Se Markdown falhar, tentar sem parse_mode
         $resposta = json_decode($resultado, true);
         if (!($resposta['ok'] ?? false)) {
-            $payload['parse_mode'] = null;
             unset($payload['parse_mode']);
             curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
             curl_exec($ch);
@@ -82,15 +81,19 @@ function enviarTelegram($chatId, $texto, $extras = []) {
     }
 }
 
-function telegramDigitando($chatId) {
+function telegramDigitando($chatId, $threadId = null) {
     $url = 'https://api.telegram.org/bot' . TELEGRAM_BOT_TOKEN . '/sendChatAction';
+    $payload = [
+        'chat_id' => $chatId,
+        'action' => 'typing',
+    ];
+    if ($threadId) {
+        $payload['message_thread_id'] = (int)$threadId;
+    }
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_POST => true,
-        CURLOPT_POSTFIELDS => json_encode([
-            'chat_id' => $chatId,
-            'action' => 'typing',
-        ]),
+        CURLOPT_POSTFIELDS => json_encode($payload),
         CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => 5,

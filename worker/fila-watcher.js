@@ -215,13 +215,15 @@ function executarClaude(mensagem, contexto, claudeSessionId) {
 // ENVIAR RESPOSTA VIA PHP
 // ========================================
 
-function enviarViaPHP(canal, chatId, texto, messageId) {
+function enviarViaPHP(canal, chatId, texto, messageId, threadId) {
     return new Promise((resolve) => {
         const endpoint = canal === 'telegram'
             ? '/api/enviar-telegram.php'
             : '/api/enviar-whatsapp.php';
 
-        const corpo = JSON.stringify({ chat_id: chatId, texto, message_id: messageId });
+        const payload = { chat_id: chatId, texto, message_id: messageId };
+        if (threadId) payload.thread_id = threadId;
+        const corpo = JSON.stringify(payload);
 
         const req = http.request({
             hostname: '127.0.0.1',
@@ -292,8 +294,8 @@ async function processarItem(arquivo) {
 
         log('fila', `Resposta: "${resultado.texto.substring(0, 100)}"`);
 
-        // Enviar resposta ao canal
-        await enviarViaPHP(item.canal, item.chat_id, resultado.texto, item.message_id);
+        // Enviar resposta ao canal (com thread_id para Topics)
+        await enviarViaPHP(item.canal, item.chat_id, resultado.texto, item.message_id, item.thread_id);
 
         // Salvar resposta no Supabase
         if (SUPABASE_URL && SUPABASE_KEY) {
@@ -337,7 +339,8 @@ async function processarItem(arquivo) {
                 item.canal,
                 item.chat_id,
                 'Desculpe, tive um problema processando sua mensagem. Tente novamente em alguns segundos.',
-                item.message_id
+                item.message_id,
+                item.thread_id
             );
         } catch {}
 

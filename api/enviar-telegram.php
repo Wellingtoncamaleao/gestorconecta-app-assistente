@@ -19,6 +19,11 @@ $chatId = $body['chat_id'];
 $texto = $body['texto'];
 $extras = [];
 
+// Responder no topico correto (Topics/Forum)
+if (!empty($body['thread_id'])) {
+    $extras['message_thread_id'] = (int)$body['thread_id'];
+}
+
 // Reply ao message_id original
 if (!empty($body['message_id'])) {
     $extras['reply_to_message_id'] = $body['message_id'];
