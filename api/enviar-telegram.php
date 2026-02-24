@@ -33,6 +33,9 @@ if (!empty($body['message_id'])) {
 if ($tipo === 'foto' && !empty($body['media_path'])) {
     $legenda = $body['legenda'] ?? '';
     telegramEnviarFoto($chatId, $body['media_path'], $legenda, $extras);
+} elseif ($tipo === 'video' && !empty($body['media_path'])) {
+    $legenda = $body['legenda'] ?? '';
+    telegramEnviarVideo($chatId, $body['media_path'], $legenda, $extras);
 } else {
     if (empty($body['texto'])) {
         responderErro('texto obrigatorio para tipo texto', 400);

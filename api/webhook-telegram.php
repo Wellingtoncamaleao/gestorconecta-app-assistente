@@ -84,14 +84,17 @@ if ($ferramenta === 'instagram-replicar') {
         $textoEnriquecido = enriquecerMensagemInstagram($texto);
         logAssistente('info', 'webhook-telegram', 'Instagram: ' . count($linksInsta) . ' link(s) enriquecido(s)');
 
-        // Baixar imagem + aplicar marca dagua + enviar ao Telegram
-        $mediaPath = processarMidiaInstagram($linksInsta[0]);
-        if ($mediaPath) {
+        // Baixar midia + aplicar marca dagua + enviar ao Telegram
+        $midia = processarMidiaInstagram($linksInsta[0]);
+        if ($midia) {
             $extrasMedia = [];
             if ($threadId) $extrasMedia['message_thread_id'] = (int)$threadId;
-            telegramEnviarFoto($chatId, $mediaPath, MARCA_DAGUA_TEXTO, $extrasMedia);
-            logAssistente('info', 'webhook-telegram', 'Imagem com marca dagua enviada');
-            // Limpar midia antiga (1h+)
+            if ($midia['tipo'] === 'video') {
+                telegramEnviarVideo($chatId, $midia['path'], MARCA_DAGUA_TEXTO, $extrasMedia);
+            } else {
+                telegramEnviarFoto($chatId, $midia['path'], MARCA_DAGUA_TEXTO, $extrasMedia);
+            }
+            logAssistente('info', 'webhook-telegram', $midia['tipo'] . ' com marca dagua enviado');
             limparMidiaAntiga();
         }
     }

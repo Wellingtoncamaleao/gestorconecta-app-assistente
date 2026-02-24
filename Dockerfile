@@ -1,13 +1,17 @@
 FROM php:8.4-fpm-bookworm
 
-# Dependencias do sistema + GD para processamento de imagem
+# Dependencias do sistema + GD + ffmpeg + python3 (para yt-dlp)
 RUN apt-get update && apt-get install -y \
     nginx supervisor curl git jq procps \
     libcurl4-openssl-dev \
     libfreetype6-dev libjpeg62-turbo-dev libpng-dev libwebp-dev \
+    ffmpeg python3 python3-pip python3-venv \
     && docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp \
     && docker-php-ext-install curl gd \
     && rm -rf /var/lib/apt/lists/*
+
+# yt-dlp (download de midia Instagram/YouTube)
+RUN pip3 install --break-system-packages yt-dlp
 
 # Node.js 22
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \

@@ -576,26 +576,75 @@ function enriquecerMensagemInstagram($texto) {
 }
 
 // ========================================
-// MIDIA INSTAGRAM (download + marca dagua)
+// MIDIA INSTAGRAM (yt-dlp + GD + ffmpeg)
 // ========================================
 
 define('MEDIA_DIR', '/tmp/assistente/media');
 define('MARCA_DAGUA_TEXTO', '@wellington_camaleao');
 
 /**
- * Baixa a imagem de um post do Instagram.
- * Usa og:image (thumbnail) ou thumbnail_url do oEmbed.
- * Retorna path do arquivo local ou null.
+ * Baixa midia de um post Instagram via yt-dlp.
+ * Retorna array ['path' => string, 'tipo' => 'imagem'|'video'] ou null.
  */
-function baixarImagemInstagram($dados) {
+function baixarMidiaInstagram($url) {
+    if (!is_dir(MEDIA_DIR)) mkdir(MEDIA_DIR, 0775, true);
+
+    // Limpar parametros de tracking
+    $urlLimpa = preg_replace('/[?&](igsh|utm_\w+)=[^&]*/', '', $url);
+    $urlLimpa = rtrim($urlLimpa, '?&');
+
+    $hash = md5($urlLimpa . time());
+    $outputTemplate = MEDIA_DIR . '/' . $hash . '.%(ext)s';
+
+    // yt-dlp: baixar melhor qualidade, max 50MB (limite Telegram video)
+    $cmd = sprintf(
+        'yt-dlp --no-playlist --max-filesize 50m -o %s %s 2>&1',
+        escapeshellarg($outputTemplate),
+        escapeshellarg($urlLimpa)
+    );
+
+    $output = [];
+    $exitCode = 0;
+    exec($cmd, $output, $exitCode);
+    $outputStr = implode("\n", $output);
+
+    if ($exitCode !== 0) {
+        logAssistente('aviso', 'midia', 'yt-dlp falhou (exit ' . $exitCode . ')', [
+            'url' => $urlLimpa,
+            'output' => mb_substr($outputStr, 0, 500),
+        ]);
+        // Fallback: tentar baixar thumbnail via og:image
+        return baixarThumbnailFallback($url);
+    }
+
+    // Encontrar arquivo baixado (yt-dlp substitui %(ext)s pela extensao real)
+    $arquivos = glob(MEDIA_DIR . '/' . $hash . '.*');
+    if (empty($arquivos)) {
+        logAssistente('aviso', 'midia', 'yt-dlp: nenhum arquivo gerado');
+        return baixarThumbnailFallback($url);
+    }
+
+    $arquivo = $arquivos[0];
+    $ext = strtolower(pathinfo($arquivo, PATHINFO_EXTENSION));
+    $tipo = in_array($ext, ['mp4', 'webm', 'mkv', 'mov']) ? 'video' : 'imagem';
+
+    $tamanho = filesize($arquivo);
+    logAssistente('info', 'midia', "yt-dlp OK: {$tipo} ({$ext}, " . round($tamanho / 1024) . "KB)", [
+        'path' => $arquivo,
+    ]);
+
+    return ['path' => $arquivo, 'tipo' => $tipo];
+}
+
+/**
+ * Fallback: baixar thumbnail via og:image quando yt-dlp falha.
+ */
+function baixarThumbnailFallback($url) {
+    $dados = buscarDadosInstagram($url);
     $imageUrl = $dados['thumbnail_url'] ?? null;
     if (!$imageUrl) return null;
 
-    if (!is_dir(MEDIA_DIR)) mkdir(MEDIA_DIR, 0775, true);
-
-    $hash = md5($dados['url'] . time());
-    $tempPath = MEDIA_DIR . '/' . $hash . '_original';
-
+    $hash = md5($url . time());
     $ch = curl_init($imageUrl);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
@@ -604,47 +653,33 @@ function baixarImagemInstagram($dados) {
         CURLOPT_MAXREDIRS => 5,
         CURLOPT_USERAGENT => 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
     ]);
-    $imagemBinario = curl_exec($ch);
+    $binario = curl_exec($ch);
     $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
     curl_close($ch);
 
-    if ($httpCode < 200 || $httpCode >= 400 || !$imagemBinario) {
-        logAssistente('aviso', 'midia', 'Falha download imagem: HTTP ' . $httpCode);
-        return null;
-    }
+    if ($httpCode < 200 || $httpCode >= 400 || !$binario) return null;
 
-    // Determinar extensao pela content-type
-    $ext = 'jpg';
-    if (strpos($contentType, 'png') !== false) $ext = 'png';
-    elseif (strpos($contentType, 'webp') !== false) $ext = 'webp';
+    $path = MEDIA_DIR . '/' . $hash . '.jpg';
+    file_put_contents($path, $binario);
 
-    $finalPath = MEDIA_DIR . '/' . $hash . '.' . $ext;
-    file_put_contents($finalPath, $imagemBinario);
-
-    logAssistente('info', 'midia', 'Imagem baixada: ' . strlen($imagemBinario) . ' bytes', [
-        'ext' => $ext,
-        'path' => $finalPath,
-    ]);
-
-    return $finalPath;
+    logAssistente('info', 'midia', 'Fallback thumbnail OK: ' . strlen($binario) . ' bytes');
+    return ['path' => $path, 'tipo' => 'imagem'];
 }
 
 /**
  * Aplica marca dagua de texto em uma imagem usando GD.
- * Retorna path da imagem processada ou null.
+ * Retorna path da imagem processada ou o original se falhar.
  */
-function aplicarMarcaDagua($imagemPath, $texto = null) {
+function aplicarMarcaDaguaImagem($imagemPath, $texto = null) {
     if (!$texto) $texto = MARCA_DAGUA_TEXTO;
     if (!file_exists($imagemPath)) return null;
     if (!function_exists('imagecreatefromjpeg')) {
         logAssistente('aviso', 'midia', 'GD nao disponivel, enviando sem marca dagua');
-        return $imagemPath; // retorna original se GD nao instalado
+        return $imagemPath;
     }
 
     $ext = strtolower(pathinfo($imagemPath, PATHINFO_EXTENSION));
 
-    // Carregar imagem conforme formato
     switch ($ext) {
         case 'png':  $img = @imagecreatefrompng($imagemPath); break;
         case 'webp': $img = @imagecreatefromwebp($imagemPath); break;
@@ -659,37 +694,69 @@ function aplicarMarcaDagua($imagemPath, $texto = null) {
     $largura = imagesx($img);
     $altura = imagesy($img);
 
-    // Tamanho da fonte proporcional a imagem (3-5% da largura)
-    $tamanhoFonte = max(12, (int)($largura * 0.035));
-
-    // Usar fonte embutida do GD (sem precisar de .ttf)
-    // Para texto proporcional, usar imagestring com fonte 5 (maior embutida)
-    // Melhor: usar imagettftext se tiver fonte, senao fallback
-    $fonteInterna = 5; // Maior fonte embutida do GD
+    $fonteInterna = 5;
     $charW = imagefontwidth($fonteInterna);
     $charH = imagefontheight($fonteInterna);
     $textoW = $charW * strlen($texto);
     $textoH = $charH;
 
-    // Posicao: canto inferior direito com margem
     $margem = (int)($largura * 0.03);
     $x = $largura - $textoW - $margem;
     $y = $altura - $textoH - $margem;
 
-    // Fundo semi-transparente
-    $bgColor = imagecolorallocatealpha($img, 0, 0, 0, 60); // preto 50% transparente
+    // Fundo semi-transparente preto
+    $bgColor = imagecolorallocatealpha($img, 0, 0, 0, 60);
     imagefilledrectangle($img, $x - 8, $y - 4, $x + $textoW + 8, $y + $textoH + 4, $bgColor);
 
     // Texto branco
     $textColor = imagecolorallocate($img, 255, 255, 255);
     imagestring($img, $fonteInterna, $x, $y, $texto, $textColor);
 
-    // Salvar como JPEG (boa compressao para Telegram)
     $outputPath = preg_replace('/\.\w+$/', '_marca.jpg', $imagemPath);
     imagejpeg($img, $outputPath, 92);
     imagedestroy($img);
 
-    logAssistente('info', 'midia', 'Marca dagua aplicada', ['output' => $outputPath]);
+    return $outputPath;
+}
+
+/**
+ * Aplica marca dagua em video usando ffmpeg.
+ * Retorna path do video processado ou o original se falhar.
+ */
+function aplicarMarcaDaguaVideo($videoPath, $texto = null) {
+    if (!$texto) $texto = MARCA_DAGUA_TEXTO;
+    if (!file_exists($videoPath)) return null;
+
+    $outputPath = preg_replace('/\.\w+$/', '_marca.mp4', $videoPath);
+
+    // ffmpeg: texto branco com fundo semi-transparente no canto inferior direito
+    $drawtext = sprintf(
+        "drawtext=text='%s':fontsize=24:fontcolor=white:borderw=2:bordercolor=black"
+        . ":x=w-tw-20:y=h-th-20"
+        . ":box=1:boxcolor=black@0.4:boxborderw=8",
+        addcslashes($texto, "'\\")
+    );
+
+    $cmd = sprintf(
+        'ffmpeg -y -i %s -vf %s -c:a copy -movflags +faststart %s 2>&1',
+        escapeshellarg($videoPath),
+        escapeshellarg($drawtext),
+        escapeshellarg($outputPath)
+    );
+
+    $output = [];
+    $exitCode = 0;
+    exec($cmd, $output, $exitCode);
+
+    if ($exitCode !== 0 || !file_exists($outputPath)) {
+        logAssistente('aviso', 'midia', 'ffmpeg falhou, enviando video original', [
+            'exit' => $exitCode,
+            'output' => mb_substr(implode("\n", $output), -500),
+        ]);
+        return $videoPath;
+    }
+
+    logAssistente('info', 'midia', 'Marca dagua video OK: ' . round(filesize($outputPath) / 1024) . 'KB');
     return $outputPath;
 }
 
@@ -697,63 +764,103 @@ function aplicarMarcaDagua($imagemPath, $texto = null) {
  * Envia foto via Telegram Bot API (sendPhoto com multipart upload).
  */
 function telegramEnviarFoto($chatId, $fotoPath, $legenda = '', $extras = []) {
-    if (!file_exists($fotoPath)) {
-        logAssistente('aviso', 'telegram', 'Foto nao encontrada: ' . $fotoPath);
-        return false;
-    }
+    if (!file_exists($fotoPath)) return false;
 
     $url = 'https://api.telegram.org/bot' . TELEGRAM_BOT_TOKEN . '/sendPhoto';
-
     $payload = array_merge([
         'chat_id' => $chatId,
         'photo' => new CURLFile($fotoPath, 'image/jpeg', 'instagram.jpg'),
     ], $extras);
 
     if ($legenda) {
-        $payload['caption'] = mb_substr($legenda, 0, 1024); // Telegram max caption
+        $payload['caption'] = mb_substr($legenda, 0, 1024);
     }
 
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_POST => true,
-        CURLOPT_POSTFIELDS => $payload, // multipart quando tem CURLFile
+        CURLOPT_POSTFIELDS => $payload,
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => 30,
     ]);
     $resultado = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
 
     $resposta = json_decode($resultado, true);
     if (!($resposta['ok'] ?? false)) {
-        logAssistente('aviso', 'telegram', 'Falha sendPhoto: HTTP ' . $httpCode, [
+        logAssistente('aviso', 'telegram', 'Falha sendPhoto', [
             'erro' => $resposta['description'] ?? $resultado,
         ]);
         return false;
     }
-
     return true;
 }
 
 /**
- * Processa midia de um post Instagram: baixa imagem + aplica marca dagua.
- * Retorna path da imagem processada ou null.
+ * Envia video via Telegram Bot API (sendVideo com multipart upload).
  */
-function processarMidiaInstagram($url) {
-    $dados = buscarDadosInstagram($url);
-    if (!$dados) return null;
+function telegramEnviarVideo($chatId, $videoPath, $legenda = '', $extras = []) {
+    if (!file_exists($videoPath)) return false;
 
-    $imagemPath = baixarImagemInstagram($dados);
-    if (!$imagemPath) return null;
+    $url = 'https://api.telegram.org/bot' . TELEGRAM_BOT_TOKEN . '/sendVideo';
 
-    $processada = aplicarMarcaDagua($imagemPath);
+    // Detectar mime type
+    $ext = strtolower(pathinfo($videoPath, PATHINFO_EXTENSION));
+    $mime = ($ext === 'webm') ? 'video/webm' : 'video/mp4';
 
-    // Limpar original se gerou arquivo com marca
-    if ($processada !== $imagemPath && file_exists($imagemPath)) {
-        @unlink($imagemPath);
+    $payload = array_merge([
+        'chat_id' => $chatId,
+        'video' => new CURLFile($videoPath, $mime, 'instagram.' . $ext),
+        'supports_streaming' => 'true',
+    ], $extras);
+
+    if ($legenda) {
+        $payload['caption'] = mb_substr($legenda, 0, 1024);
     }
 
-    return $processada;
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => $payload,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 120, // videos maiores
+    ]);
+    $resultado = curl_exec($ch);
+    curl_close($ch);
+
+    $resposta = json_decode($resultado, true);
+    if (!($resposta['ok'] ?? false)) {
+        logAssistente('aviso', 'telegram', 'Falha sendVideo', [
+            'erro' => $resposta['description'] ?? $resultado,
+        ]);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Processa midia de um post Instagram: baixa + aplica marca dagua.
+ * Retorna array ['path', 'tipo'] da midia processada ou null.
+ */
+function processarMidiaInstagram($url) {
+    $midia = baixarMidiaInstagram($url);
+    if (!$midia) return null;
+
+    $path = $midia['path'];
+    $tipo = $midia['tipo'];
+
+    if ($tipo === 'video') {
+        $processada = aplicarMarcaDaguaVideo($path);
+    } else {
+        $processada = aplicarMarcaDaguaImagem($path);
+    }
+
+    // Limpar original se gerou arquivo com marca
+    if ($processada !== $path && file_exists($path)) {
+        @unlink($path);
+    }
+
+    return ['path' => $processada, 'tipo' => $tipo];
 }
 
 /**
