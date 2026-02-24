@@ -1,0 +1,23 @@
+{
+    "geral": {
+        "nome": "Geral",
+        "descricao": "Conversa livre, coding, duvidas tecnicas",
+        "prompt": "sistema-padrao.txt",
+        "max_turns": 10,
+        "timeout_ms": 300000
+    },
+    "instagram-replicar": {
+        "nome": "Instagram Replicar",
+        "descricao": "Analisa posts e replica ideias com banco de midia proprio",
+        "prompt": "ferramenta-instagram-replicar.txt",
+        "max_turns": 15,
+        "timeout_ms": 300000
+    },
+    "youtube-resumo": {
+        "nome": "YouTube Resumo",
+        "descricao": "Resume e analisa videos do YouTube",
+        "prompt": "ferramenta-youtube-resumo.txt",
+        "max_turns": 10,
+        "timeout_ms": 300000
+    }
+}

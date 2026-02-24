@@ -273,3 +273,147 @@ function responderJson($dados, $codigo = 200) {
 function responderErro($mensagem, $codigo = 400) {
     responderJson(['erro' => $mensagem], $codigo);
 }
+
+// ========================================
+// FERRAMENTAS (mapeamento topico → ferramenta)
+// ========================================
+
+function carregarFerramentas() {
+    $arquivo = '/var/www/html/tools/ferramentas.json';
+    if (!file_exists($arquivo)) return ['geral' => ['nome' => 'Geral', 'prompt' => 'sistema-padrao.txt']];
+    $dados = json_decode(file_get_contents($arquivo), true);
+    return $dados ?: ['geral' => ['nome' => 'Geral', 'prompt' => 'sistema-padrao.txt']];
+}
+
+function detectarFerramenta($chatId, $threadId) {
+    if (!$threadId) return 'geral';
+
+    $mapa = buscarConfig('mapa_topicos');
+    if (!$mapa) return 'geral';
+
+    $mapa = json_decode($mapa, true);
+    if (!$mapa) return 'geral';
+
+    // Tentar chat_id:thread_id primeiro, depois thread_id sozinho
+    $chave = $chatId . ':' . $threadId;
+    if (isset($mapa[$chave])) return $mapa[$chave];
+    if (isset($mapa[$threadId])) return $mapa[$threadId];
+
+    return 'geral';
+}
+
+function mapearTopico($chatId, $threadId, $slug) {
+    if (!$threadId) {
+        return 'Comando /mapear so funciona dentro de um topico (Topic).';
+    }
+
+    $ferramentas = carregarFerramentas();
+    if (!isset($ferramentas[$slug])) {
+        $disponiveis = implode(', ', array_keys($ferramentas));
+        return "Ferramenta '$slug' nao encontrada.\nDisponiveis: $disponiveis";
+    }
+
+    // Buscar mapa atual
+    $mapaAtual = buscarConfig('mapa_topicos');
+    $mapa = $mapaAtual ? json_decode($mapaAtual, true) : [];
+    if (!is_array($mapa)) $mapa = [];
+
+    // Salvar mapping
+    $chave = $chatId . ':' . $threadId;
+    $mapa[$chave] = $slug;
+
+    // Upsert no configs
+    supabaseFetch('assistente_configs?chave=eq.mapa_topicos', [
+        'metodo' => 'PATCH',
+        'corpo' => ['valor' => json_encode($mapa), 'atualizado_em' => date('c')]
+    ]);
+
+    $nome = $ferramentas[$slug]['nome'] ?? $slug;
+    return "Topico mapeado para: *{$nome}*\nSlug: `{$slug}`\nPrompt: {$ferramentas[$slug]['prompt']}";
+}
+
+function desmapearTopico($chatId, $threadId) {
+    if (!$threadId) {
+        return 'Comando /desmapear so funciona dentro de um topico (Topic).';
+    }
+
+    $mapaAtual = buscarConfig('mapa_topicos');
+    $mapa = $mapaAtual ? json_decode($mapaAtual, true) : [];
+    if (!is_array($mapa)) $mapa = [];
+
+    $chave = $chatId . ':' . $threadId;
+    $antigo = $mapa[$chave] ?? null;
+
+    if (!$antigo) {
+        return 'Este topico nao tem ferramenta mapeada.';
+    }
+
+    unset($mapa[$chave]);
+
+    supabaseFetch('assistente_configs?chave=eq.mapa_topicos', [
+        'metodo' => 'PATCH',
+        'corpo' => ['valor' => json_encode($mapa), 'atualizado_em' => date('c')]
+    ]);
+
+    return "Mapeamento removido (era: `{$antigo}`).\nTopico voltou para modo *Geral*.";
+}
+
+function listarFerramentas() {
+    $ferramentas = carregarFerramentas();
+    $lista = "Ferramentas disponiveis:\n\n";
+    foreach ($ferramentas as $slug => $info) {
+        $lista .= "• *{$info['nome']}* (`{$slug}`)\n  {$info['descricao']}\n\n";
+    }
+    $lista .= "Use `/mapear slug` dentro de um topico para ativar.";
+    return $lista;
+}
+
+// ========================================
+// COMANDOS INTERNOS
+// ========================================
+
+function processarComando($texto, $chatId, $threadId) {
+    $extras = [];
+    if ($threadId) $extras['message_thread_id'] = (int)$threadId;
+
+    // /ferramentas — listar ferramentas
+    if ($texto === '/ferramentas') {
+        enviarTelegram($chatId, listarFerramentas(), $extras);
+        return true;
+    }
+
+    // /mapear <slug> — mapear topico a ferramenta
+    if (strpos($texto, '/mapear ') === 0) {
+        $slug = trim(substr($texto, 8));
+        $resultado = mapearTopico($chatId, $threadId, $slug);
+        enviarTelegram($chatId, $resultado, $extras);
+        return true;
+    }
+
+    // /desmapear — remover mapeamento do topico
+    if ($texto === '/desmapear') {
+        $resultado = desmapearTopico($chatId, $threadId);
+        enviarTelegram($chatId, $resultado, $extras);
+        return true;
+    }
+
+    // /topicos — mostrar mapeamentos ativos
+    if ($texto === '/topicos') {
+        $mapa = buscarConfig('mapa_topicos');
+        $mapa = $mapa ? json_decode($mapa, true) : [];
+        if (empty($mapa)) {
+            enviarTelegram($chatId, 'Nenhum topico mapeado. Use `/mapear slug` em um topico.', $extras);
+        } else {
+            $ferramentas = carregarFerramentas();
+            $lista = "Topicos mapeados:\n\n";
+            foreach ($mapa as $chave => $slug) {
+                $nome = $ferramentas[$slug]['nome'] ?? $slug;
+                $lista .= "• `{$chave}` → *{$nome}* (`{$slug}`)\n";
+            }
+            enviarTelegram($chatId, $lista, $extras);
+        }
+        return true;
+    }
+
+    return false; // nao e comando
+}

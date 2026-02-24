@@ -2,7 +2,7 @@ FROM php:8.4-fpm-bookworm
 
 # Dependencias do sistema
 RUN apt-get update && apt-get install -y \
-    nginx supervisor curl git jq \
+    nginx supervisor curl git jq procps \
     libcurl4-openssl-dev \
     && docker-php-ext-install curl \
     && rm -rf /var/lib/apt/lists/*
@@ -36,6 +36,7 @@ RUN chmod +x /entrypoint.sh
 # Aplicacao
 COPY api/ /var/www/html/api/
 COPY prompts/ /var/www/html/prompts/
+COPY tools/ /var/www/html/tools/
 COPY web/ /var/www/html/web/
 COPY worker/ /var/www/worker/
 

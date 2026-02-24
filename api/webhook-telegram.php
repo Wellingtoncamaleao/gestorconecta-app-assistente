@@ -62,10 +62,18 @@ if (empty(trim($texto))) {
     responderJson(['ok' => true]);
 }
 
+// Processar comandos internos (/ferramentas, /mapear, /desmapear, /topicos)
+if (strpos($texto, '/') === 0 && processarComando($texto, $chatId, $threadId)) {
+    responderJson(['ok' => true]);
+}
+
 // Chave da sessao: chat_id + thread_id (para Topics)
 // Em chat direto: thread_id = null, sessao por chat_id
 // Em grupo com Topics: cada topico = sessao separada
 $sessaoKey = $threadId ? $chatId . ':' . $threadId : $chatId;
+
+// Detectar ferramenta pelo mapeamento do topico
+$ferramenta = detectarFerramenta($chatId, $threadId);
 
 // Indicar que esta processando
 telegramDigitando($chatId, $threadId);
@@ -78,6 +86,7 @@ salvarMensagem($sessao['id'], 'telegram', $sessaoKey, 'recebida', $texto, [
     'telegram_message_id' => $messageId,
     'thread_id' => $threadId,
     'nome' => $nome,
+    'ferramenta' => $ferramenta,
 ]);
 
 // Criar item na fila para o worker processar
@@ -85,6 +94,7 @@ criarItemFila([
     'canal' => 'telegram',
     'chat_id' => $chatId,
     'thread_id' => $threadId,
+    'ferramenta' => $ferramenta,
     'mensagem' => $texto,
     'sessao_id' => $sessao['id'],
     'claude_session_id' => $sessao['claude_session_id'],

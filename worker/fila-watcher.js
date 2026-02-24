@@ -1,6 +1,7 @@
 /**
  * ASSISTENTE - Worker Node.js
  * Monitora a fila de mensagens e executa Claude Code CLI
+ * Suporta ferramentas por topico (prompt + config customizados)
  */
 
 const fs = require('fs');
@@ -12,10 +13,12 @@ const http = require('http');
 const FILA_DIR = '/var/assistente/fila';
 const PROCESSADOS_DIR = '/var/assistente/fila/processados';
 const PROMPTS_DIR = '/var/www/html/prompts';
+const TOOLS_DIR = '/var/www/html/tools';
 const TEMP_DIR = '/tmp/assistente';
 
-// Config
-const TIMEOUT_MS = 300000; // 5 minutos
+// Config padrao
+const TIMEOUT_PADRAO_MS = 300000; // 5 minutos
+const MAX_TURNS_PADRAO = 10;
 const INTERVALO_POLL_MS = 2000;
 
 // Supabase config
@@ -30,6 +33,32 @@ function log(componente, msg, dados) {
     const ts = new Date().toISOString().slice(11, 19);
     const extra = dados ? ` | ${JSON.stringify(dados)}` : '';
     console.log(`[${ts}][${componente}] ${msg}${extra}`);
+}
+
+// ========================================
+// FERRAMENTAS
+// ========================================
+
+function carregarFerramentas() {
+    const arquivo = path.join(TOOLS_DIR, 'ferramentas.json');
+    try {
+        return JSON.parse(fs.readFileSync(arquivo, 'utf8'));
+    } catch {
+        log('tools', 'ferramentas.json nao encontrado, usando padrao');
+        return {
+            geral: {
+                nome: 'Geral',
+                prompt: 'sistema-padrao.txt',
+                max_turns: MAX_TURNS_PADRAO,
+                timeout_ms: TIMEOUT_PADRAO_MS,
+            }
+        };
+    }
+}
+
+function obterConfigFerramenta(slug) {
+    const ferramentas = carregarFerramentas();
+    return ferramentas[slug] || ferramentas['geral'];
 }
 
 // ========================================
@@ -65,12 +94,18 @@ async function supabaseFetch(caminho, opcoes = {}) {
 // CARREGAR CONTEXTO
 // ========================================
 
-function carregarSystemPrompt() {
-    const arquivo = path.join(PROMPTS_DIR, 'sistema-padrao.txt');
+function carregarSystemPrompt(arquivoPrompt = 'sistema-padrao.txt') {
+    const caminho = path.join(PROMPTS_DIR, arquivoPrompt);
     try {
-        return fs.readFileSync(arquivo, 'utf8');
+        return fs.readFileSync(caminho, 'utf8');
     } catch {
-        return 'Voce e o assistente pessoal do Wellington. Responda em portugues brasileiro.';
+        log('prompt', `Arquivo ${arquivoPrompt} nao encontrado, usando padrao`);
+        const padrao = path.join(PROMPTS_DIR, 'sistema-padrao.txt');
+        try {
+            return fs.readFileSync(padrao, 'utf8');
+        } catch {
+            return 'Voce e o assistente pessoal do Wellington. Responda em portugues brasileiro.';
+        }
     }
 }
 
@@ -107,21 +142,23 @@ async function carregarHistorico(sessaoId) {
 // EXECUTAR CLAUDE CODE CLI (via spawn + stdin)
 // ========================================
 
-function executarClaude(mensagem, contexto, claudeSessionId) {
+function executarClaude(mensagem, contexto, claudeSessionId, opcoes = {}) {
+    const maxTurns = opcoes.maxTurns || MAX_TURNS_PADRAO;
+    const timeoutMs = opcoes.timeoutMs || TIMEOUT_PADRAO_MS;
+
     return new Promise((resolve, reject) => {
         const promptCompleto = contexto
             ? `${contexto}\n\n---\nMensagem do usuario:\n${mensagem}`
             : mensagem;
 
-        // Salvar prompt em arquivo temp e passar via shell pipe
+        // Salvar prompt em arquivo temp
         const promptFile = path.join(TEMP_DIR, `p-${Date.now()}.txt`);
         fs.writeFileSync(promptFile, promptCompleto, 'utf8');
 
-        // Construir comando shell: ler arquivo e passar via -p
         const args = [
             '--dangerously-skip-permissions',
             '--output-format', 'json',
-            '--max-turns', '10',
+            '--max-turns', String(maxTurns),
         ];
 
         if (claudeSessionId) {
@@ -133,6 +170,8 @@ function executarClaude(mensagem, contexto, claudeSessionId) {
         log('claude', 'Executando CLI...', {
             msgLen: mensagem.length,
             ctxLen: contexto ? contexto.length : 0,
+            maxTurns,
+            timeoutMs,
             resume: claudeSessionId || 'nova',
         });
 
@@ -155,10 +194,10 @@ function executarClaude(mensagem, contexto, claudeSessionId) {
 
         // Timeout manual
         const timer = setTimeout(() => {
-            log('claude', `TIMEOUT apos ${TIMEOUT_MS}ms - matando processo`);
+            log('claude', `TIMEOUT apos ${timeoutMs}ms - matando processo`);
             proc.kill('SIGTERM');
             setTimeout(() => proc.kill('SIGKILL'), 5000);
-        }, TIMEOUT_MS);
+        }, timeoutMs);
 
         proc.on('close', (code, signal) => {
             clearTimeout(timer);
@@ -289,10 +328,17 @@ async function processarItem(arquivo) {
         const conteudo = fs.readFileSync(arquivo, 'utf8');
         const item = JSON.parse(conteudo);
 
-        log('fila', `Msg de ${item.canal}/${item.chat_id}: "${item.mensagem.substring(0, 50)}"`);
+        // Detectar ferramenta (passada pelo webhook ou padrao)
+        const ferramentaSlug = item.ferramenta || 'geral';
+        const ferramentaConfig = obterConfigFerramenta(ferramentaSlug);
 
-        // Montar contexto
-        const systemPrompt = carregarSystemPrompt();
+        log('fila', `Msg de ${item.canal}/${item.chat_id}: "${item.mensagem.substring(0, 50)}"`, {
+            ferramenta: ferramentaSlug,
+            prompt: ferramentaConfig.prompt,
+        });
+
+        // Montar contexto com prompt especifico da ferramenta
+        const systemPrompt = carregarSystemPrompt(ferramentaConfig.prompt);
         const memoria = await carregarMemoria();
         const historico = await carregarHistorico(item.sessao_id);
 
@@ -302,21 +348,28 @@ async function processarItem(arquivo) {
             historico ? `\n## Historico Recente\n${historico}` : '',
         ].filter(Boolean).join('\n');
 
-        log('fila', `Contexto: ${contexto.length} chars`);
+        log('fila', `Contexto: ${contexto.length} chars (ferramenta: ${ferramentaSlug})`);
 
-        // Executar Claude Code CLI
+        // Executar Claude Code CLI com config da ferramenta
         let resultado;
         try {
             resultado = await executarClaude(
                 item.mensagem,
                 contexto,
-                item.claude_session_id
+                item.claude_session_id,
+                {
+                    maxTurns: ferramentaConfig.max_turns,
+                    timeoutMs: ferramentaConfig.timeout_ms,
+                }
             );
         } catch (erroResume) {
             // Se falhou com --resume (sessao nao encontrada), tentar sem
             if (item.claude_session_id && erroResume.message.includes('No conversation found')) {
                 log('fila', 'Sessao nao encontrada, tentando sem --resume...');
-                resultado = await executarClaude(item.mensagem, contexto, null);
+                resultado = await executarClaude(item.mensagem, contexto, null, {
+                    maxTurns: ferramentaConfig.max_turns,
+                    timeoutMs: ferramentaConfig.timeout_ms,
+                });
             } else {
                 throw erroResume;
             }
@@ -341,6 +394,7 @@ async function processarItem(arquivo) {
                     tokens_saida: resultado.tokensSaida,
                     tempo_resposta_ms: resultado.tempoMs,
                     modelo: resultado.modelo,
+                    metadata: { ferramenta: ferramentaSlug },
                 }
             });
 
@@ -349,6 +403,7 @@ async function processarItem(arquivo) {
                     metodo: 'PATCH',
                     corpo: {
                         claude_session_id: resultado.sessionId,
+                        ferramenta: ferramentaSlug,
                         ultima_mensagem_em: new Date().toISOString(),
                         atualizado_em: new Date().toISOString(),
                     }
@@ -422,11 +477,14 @@ async function testarCLI() {
 // INICIALIZACAO
 // ========================================
 
+const ferramentas = carregarFerramentas();
+const totalFerramentas = Object.keys(ferramentas).length;
+
 log('worker', '========================================');
 log('worker', 'ASSISTENTE IA PESSOAL - Worker Node.js');
 log('worker', `HOME: ${process.env.HOME}`);
 log('worker', `Fila: ${FILA_DIR}`);
-log('worker', `Timeout: ${TIMEOUT_MS}ms`);
+log('worker', `Ferramentas: ${totalFerramentas} carregadas (${Object.keys(ferramentas).join(', ')})`);
 log('worker', `Supabase: ${SUPABASE_URL ? 'configurado' : 'AUSENTE'}`);
 log('worker', '========================================');
 
