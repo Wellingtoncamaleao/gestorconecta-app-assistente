@@ -594,9 +594,9 @@ function baixarMidiaInstagram($url) {
     $urlLimpa = rtrim($urlLimpa, '?&');
 
     $hash = md5($urlLimpa . time());
-    $outputTemplate = MEDIA_DIR . '/' . $hash . '.%(ext)s';
 
-    // yt-dlp: baixar melhor qualidade, max 50MB (limite Telegram video)
+    // === METODO 1: yt-dlp (midia real) ===
+    $outputTemplate = MEDIA_DIR . '/' . $hash . '.%(ext)s';
     $cmd = sprintf(
         'yt-dlp --no-playlist --max-filesize 50m -o %s %s 2>&1',
         escapeshellarg($outputTemplate),
@@ -606,34 +606,30 @@ function baixarMidiaInstagram($url) {
     $output = [];
     $exitCode = 0;
     exec($cmd, $output, $exitCode);
-    $outputStr = implode("\n", $output);
 
-    if ($exitCode !== 0) {
-        logAssistente('aviso', 'midia', 'yt-dlp falhou (exit ' . $exitCode . ')', [
-            'url' => $urlLimpa,
-            'output' => mb_substr($outputStr, 0, 500),
-        ]);
-        // Fallback: tentar baixar thumbnail via og:image
-        return baixarThumbnailFallback($url);
+    if ($exitCode === 0) {
+        $arquivos = glob(MEDIA_DIR . '/' . $hash . '.*');
+        if (!empty($arquivos)) {
+            $arquivo = $arquivos[0];
+            $ext = strtolower(pathinfo($arquivo, PATHINFO_EXTENSION));
+            $tipo = in_array($ext, ['mp4', 'webm', 'mkv', 'mov']) ? 'video' : 'imagem';
+            logAssistente('info', 'midia', "yt-dlp OK: {$tipo} ({$ext}, " . round(filesize($arquivo) / 1024) . "KB)");
+            return ['path' => $arquivo, 'tipo' => $tipo];
+        }
     }
 
-    // Encontrar arquivo baixado (yt-dlp substitui %(ext)s pela extensao real)
-    $arquivos = glob(MEDIA_DIR . '/' . $hash . '.*');
-    if (empty($arquivos)) {
-        logAssistente('aviso', 'midia', 'yt-dlp: nenhum arquivo gerado');
-        return baixarThumbnailFallback($url);
-    }
-
-    $arquivo = $arquivos[0];
-    $ext = strtolower(pathinfo($arquivo, PATHINFO_EXTENSION));
-    $tipo = in_array($ext, ['mp4', 'webm', 'mkv', 'mov']) ? 'video' : 'imagem';
-
-    $tamanho = filesize($arquivo);
-    logAssistente('info', 'midia', "yt-dlp OK: {$tipo} ({$ext}, " . round($tamanho / 1024) . "KB)", [
-        'path' => $arquivo,
+    logAssistente('aviso', 'midia', 'yt-dlp falhou (exit ' . $exitCode . ')', [
+        'output' => mb_substr(implode("\n", $output), 0, 300),
     ]);
 
-    return ['path' => $arquivo, 'tipo' => $tipo];
+    // === METODO 2: Screenshot via Chromium (embed page) ===
+    $screenshot = capturarScreenshotInstagram($urlLimpa);
+    if ($screenshot) {
+        return ['path' => $screenshot, 'tipo' => 'imagem'];
+    }
+
+    // === METODO 3: Fallback og:image thumbnail ===
+    return baixarThumbnailFallback($url);
 }
 
 /**
@@ -664,6 +660,48 @@ function baixarThumbnailFallback($url) {
 
     logAssistente('info', 'midia', 'Fallback thumbnail OK: ' . strlen($binario) . ' bytes');
     return ['path' => $path, 'tipo' => 'imagem'];
+}
+
+/**
+ * Captura screenshot da pagina embed do Instagram via Chromium headless.
+ * URL embed renderiza o post sem login wall.
+ * Retorna path do PNG ou null.
+ */
+function capturarScreenshotInstagram($url) {
+    // Converter para URL embed (renderiza sem login)
+    $embedUrl = preg_replace(
+        '#(https?://(?:www\.)?instagram\.com/(?:p|reel|reels|tv)/[\w\-]+)/?.*#i',
+        '$1/embed/',
+        $url
+    );
+
+    $hash = md5($url . time());
+    $outputPath = MEDIA_DIR . '/' . $hash . '_screenshot.png';
+
+    // Chromium headless: screenshot da pagina embed
+    $cmd = sprintf(
+        'timeout 20 chromium --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage '
+        . '--window-size=1080,1350 --screenshot=%s %s 2>&1',
+        escapeshellarg($outputPath),
+        escapeshellarg($embedUrl)
+    );
+
+    $output = [];
+    $exitCode = 0;
+    exec($cmd, $output, $exitCode);
+
+    if ($exitCode === 0 && file_exists($outputPath) && filesize($outputPath) > 5000) {
+        logAssistente('info', 'midia', 'Screenshot embed OK: ' . round(filesize($outputPath) / 1024) . 'KB');
+        return $outputPath;
+    }
+
+    logAssistente('aviso', 'midia', 'Screenshot falhou (exit ' . $exitCode . ')', [
+        'output' => mb_substr(implode("\n", $output), 0, 300),
+    ]);
+
+    // Limpar arquivo vazio/corrompido
+    if (file_exists($outputPath)) @unlink($outputPath);
+    return null;
 }
 
 /**

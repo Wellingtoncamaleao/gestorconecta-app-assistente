@@ -1,11 +1,12 @@
 FROM php:8.4-fpm-bookworm
 
-# Dependencias do sistema + GD + ffmpeg + python3 (para yt-dlp)
+# Dependencias do sistema + GD + ffmpeg + python3 + chromium
 RUN apt-get update && apt-get install -y \
     nginx supervisor curl git jq procps \
     libcurl4-openssl-dev \
     libfreetype6-dev libjpeg62-turbo-dev libpng-dev libwebp-dev \
     ffmpeg python3 python3-pip python3-venv \
+    chromium \
     && docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp \
     && docker-php-ext-install curl gd \
     && rm -rf /var/lib/apt/lists/*
