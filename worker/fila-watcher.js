@@ -305,11 +305,22 @@ async function processarItem(arquivo) {
         log('fila', `Contexto: ${contexto.length} chars`);
 
         // Executar Claude Code CLI
-        const resultado = await executarClaude(
-            item.mensagem,
-            contexto,
-            item.claude_session_id
-        );
+        let resultado;
+        try {
+            resultado = await executarClaude(
+                item.mensagem,
+                contexto,
+                item.claude_session_id
+            );
+        } catch (erroResume) {
+            // Se falhou com --resume (sessao nao encontrada), tentar sem
+            if (item.claude_session_id && erroResume.message.includes('No conversation found')) {
+                log('fila', 'Sessao nao encontrada, tentando sem --resume...');
+                resultado = await executarClaude(item.mensagem, contexto, null);
+            } else {
+                throw erroResume;
+            }
+        }
 
         log('fila', `Resposta: "${resultado.texto.substring(0, 100)}"`);
 
