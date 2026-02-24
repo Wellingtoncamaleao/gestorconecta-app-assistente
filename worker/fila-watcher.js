@@ -12,6 +12,7 @@ const http = require('http');
 const FILA_DIR = '/var/assistente/fila';
 const PROCESSADOS_DIR = '/var/assistente/fila/processados';
 const PROMPTS_DIR = '/var/www/html/prompts';
+const TEMP_DIR = '/tmp/assistente';
 
 // Config
 const TIMEOUT_MS = 120000; // 2 minutos
@@ -21,6 +22,16 @@ const INTERVALO_POLL_MS = 2000; // 2 segundos
 // Supabase config (lido das env vars ou hardcoded no container)
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
+
+// ========================================
+// LOG UNIFICADO (tudo em stdout)
+// ========================================
+
+function log(componente, msg, dados) {
+    const ts = new Date().toISOString().slice(11, 19);
+    const extra = dados ? ` | ${JSON.stringify(dados)}` : '';
+    console.log(`[${ts}][${componente}] ${msg}${extra}`);
+}
 
 // ========================================
 // SUPABASE HELPERS
@@ -46,7 +57,7 @@ async function supabaseFetch(caminho, opcoes = {}) {
         const dados = await resposta.json().catch(() => null);
         return { ok: resposta.ok, status: resposta.status, dados };
     } catch (erro) {
-        console.error(`[supabase] Erro: ${erro.message}`);
+        log('supabase', `Erro: ${erro.message}`);
         return { ok: false, status: 0, dados: null };
     }
 }
@@ -65,6 +76,8 @@ function carregarSystemPrompt() {
 }
 
 async function carregarMemoria() {
+    if (!SUPABASE_URL || !SUPABASE_KEY) return '';
+
     const resultado = await supabaseFetch(
         'assistente_memoria?order=relevancia.desc&limit=20'
     );
@@ -77,7 +90,7 @@ async function carregarMemoria() {
 }
 
 async function carregarHistorico(sessaoId) {
-    if (!sessaoId) return '';
+    if (!sessaoId || !SUPABASE_URL || !SUPABASE_KEY) return '';
 
     const resultado = await supabaseFetch(
         `assistente_mensagens?sessao_id=eq.${sessaoId}&order=criado_em.desc&limit=5`
@@ -97,6 +110,12 @@ async function carregarHistorico(sessaoId) {
 
 function executarClaude(mensagem, contexto, claudeSessionId) {
     return new Promise((resolve, reject) => {
+        // Salvar contexto em arquivo temporario (evita limite de tamanho de argumento)
+        const contextFile = path.join(TEMP_DIR, `ctx-${Date.now()}.txt`);
+        if (contexto) {
+            fs.writeFileSync(contextFile, contexto, 'utf8');
+        }
+
         const args = [
             '-p', mensagem,
             '--output-format', 'json',
@@ -104,9 +123,9 @@ function executarClaude(mensagem, contexto, claudeSessionId) {
             '--dangerously-skip-permissions',
         ];
 
-        // Injetar contexto via append-system-prompt
+        // Usar --system-prompt com o contexto completo
         if (contexto) {
-            args.push('--append-system-prompt', contexto);
+            args.push('--system-prompt', contexto);
         }
 
         // Resumir sessao anterior
@@ -116,35 +135,51 @@ function executarClaude(mensagem, contexto, claudeSessionId) {
 
         const inicio = Date.now();
 
+        log('claude', `Executando CLI...`, {
+            msgLen: mensagem.length,
+            ctxLen: contexto ? contexto.length : 0,
+            resume: claudeSessionId || 'nova',
+        });
+
         const proc = execFile('claude', args, {
             timeout: TIMEOUT_MS,
             maxBuffer: 10 * 1024 * 1024, // 10MB
-            env: {
-                ...process.env,
-                CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
-            },
+            env: { ...process.env },
         }, (erro, stdout, stderr) => {
             const tempoMs = Date.now() - inicio;
 
+            // Limpar arquivo temporario
+            try { fs.unlinkSync(contextFile); } catch {}
+
             if (erro) {
-                console.error(`[claude] Erro (${tempoMs}ms): ${erro.message}`);
-                if (stderr) console.error(`[claude] stderr: ${stderr}`);
+                log('claude', `ERRO (${tempoMs}ms): ${erro.message}`);
+                if (stderr) log('claude', `stderr: ${stderr.substring(0, 500)}`);
+                if (stdout) log('claude', `stdout: ${stdout.substring(0, 500)}`);
                 reject(erro);
                 return;
             }
 
+            if (stderr) {
+                log('claude', `stderr (nao-fatal): ${stderr.substring(0, 200)}`);
+            }
+
             try {
                 const resultado = JSON.parse(stdout);
+                log('claude', `OK (${tempoMs}ms)`, {
+                    tokens: resultado.usage?.output_tokens || 0,
+                    model: resultado.modelUsage ? Object.keys(resultado.modelUsage)[0] : 'unknown',
+                });
                 resolve({
                     texto: resultado.result || resultado.text || stdout,
                     sessionId: resultado.session_id || null,
-                    modelo: resultado.model || 'desconhecido',
+                    modelo: resultado.modelUsage ? Object.keys(resultado.modelUsage)[0] : 'desconhecido',
                     tokensEntrada: resultado.usage?.input_tokens || 0,
                     tokensSaida: resultado.usage?.output_tokens || 0,
                     tempoMs,
                 });
             } catch {
                 // Se nao for JSON valido, retornar o texto bruto
+                log('claude', `Resposta nao-JSON (${tempoMs}ms): ${stdout.substring(0, 200)}`);
                 resolve({
                     texto: stdout.trim(),
                     sessionId: null,
@@ -182,11 +217,14 @@ function enviarViaPHP(canal, chatId, texto, messageId) {
         }, (res) => {
             let dados = '';
             res.on('data', chunk => dados += chunk);
-            res.on('end', () => resolve(dados));
+            res.on('end', () => {
+                log('enviar', `${canal} resposta: ${res.statusCode}`);
+                resolve(dados);
+            });
         });
 
         req.on('error', (erro) => {
-            console.error(`[enviar] Erro: ${erro.message}`);
+            log('enviar', `ERRO ${canal}: ${erro.message}`);
             resolve(null);
         });
 
@@ -206,11 +244,13 @@ async function processarItem(arquivo) {
     processando = true;
 
     const nomeArquivo = path.basename(arquivo);
-    console.log(`[fila] Processando: ${nomeArquivo}`);
+    log('fila', `Processando: ${nomeArquivo}`);
 
     try {
         const conteudo = fs.readFileSync(arquivo, 'utf8');
         const item = JSON.parse(conteudo);
+
+        log('fila', `Msg de ${item.canal}/${item.chat_id}: "${item.mensagem.substring(0, 50)}"`);
 
         // Montar contexto
         const systemPrompt = carregarSystemPrompt();
@@ -223,6 +263,8 @@ async function processarItem(arquivo) {
             historico ? `\n## Historico Recente\n${historico}` : '',
         ].filter(Boolean).join('\n');
 
+        log('fila', `Contexto montado: ${contexto.length} chars`);
+
         // Executar Claude Code CLI
         const resultado = await executarClaude(
             item.mensagem,
@@ -230,46 +272,48 @@ async function processarItem(arquivo) {
             item.claude_session_id
         );
 
-        console.log(`[claude] Resposta em ${resultado.tempoMs}ms (${resultado.tokensSaida} tokens saida)`);
+        log('claude', `Resposta: "${resultado.texto.substring(0, 100)}..."`);
 
         // Enviar resposta ao canal
         await enviarViaPHP(item.canal, item.chat_id, resultado.texto, item.message_id);
 
         // Salvar resposta no Supabase
-        await supabaseFetch('assistente_mensagens', {
-            metodo: 'POST',
-            corpo: {
-                sessao_id: item.sessao_id,
-                canal: item.canal,
-                chat_id: item.chat_id,
-                direcao: 'enviada',
-                conteudo: resultado.texto,
-                tokens_entrada: resultado.tokensEntrada,
-                tokens_saida: resultado.tokensSaida,
-                tempo_resposta_ms: resultado.tempoMs,
-                modelo: resultado.modelo,
-            }
-        });
-
-        // Atualizar sessao com session_id do Claude
-        if (resultado.sessionId && item.sessao_id) {
-            await supabaseFetch(`assistente_sessoes?id=eq.${item.sessao_id}`, {
-                metodo: 'PATCH',
+        if (SUPABASE_URL && SUPABASE_KEY) {
+            await supabaseFetch('assistente_mensagens', {
+                metodo: 'POST',
                 corpo: {
-                    claude_session_id: resultado.sessionId,
-                    ultima_mensagem_em: new Date().toISOString(),
-                    atualizado_em: new Date().toISOString(),
+                    sessao_id: item.sessao_id,
+                    canal: item.canal,
+                    chat_id: item.chat_id,
+                    direcao: 'enviada',
+                    conteudo: resultado.texto,
+                    tokens_entrada: resultado.tokensEntrada,
+                    tokens_saida: resultado.tokensSaida,
+                    tempo_resposta_ms: resultado.tempoMs,
+                    modelo: resultado.modelo,
                 }
             });
+
+            // Atualizar sessao com session_id do Claude
+            if (resultado.sessionId && item.sessao_id) {
+                await supabaseFetch(`assistente_sessoes?id=eq.${item.sessao_id}`, {
+                    metodo: 'PATCH',
+                    corpo: {
+                        claude_session_id: resultado.sessionId,
+                        ultima_mensagem_em: new Date().toISOString(),
+                        atualizado_em: new Date().toISOString(),
+                    }
+                });
+            }
         }
 
         // Mover para processados
         const destino = path.join(PROCESSADOS_DIR, nomeArquivo);
         fs.renameSync(arquivo, destino);
-        console.log(`[fila] Concluido: ${nomeArquivo}`);
+        log('fila', `Concluido: ${nomeArquivo}`);
 
     } catch (erro) {
-        console.error(`[fila] Erro processando ${nomeArquivo}: ${erro.message}`);
+        log('fila', `ERRO processando ${nomeArquivo}: ${erro.message}`);
 
         // Tentar enviar mensagem de erro ao usuario
         try {
@@ -306,7 +350,7 @@ function verificarFila() {
         }
     } catch (erro) {
         if (erro.code !== 'ENOENT') {
-            console.error(`[fila] Erro lendo diretorio: ${erro.message}`);
+            log('fila', `Erro lendo diretorio: ${erro.message}`);
         }
     }
 }
@@ -315,17 +359,18 @@ function verificarFila() {
 // INICIALIZACAO
 // ========================================
 
-console.log('========================================');
-console.log('ASSISTENTE IA PESSOAL - Worker Node.js');
-console.log(`Fila: ${FILA_DIR}`);
-console.log(`Poll: ${INTERVALO_POLL_MS}ms`);
-console.log(`Timeout CLI: ${TIMEOUT_MS}ms`);
-console.log(`OAuth token: ${process.env.CLAUDE_CODE_OAUTH_TOKEN ? 'presente' : 'AUSENTE'}`);
-console.log('========================================');
+log('worker', '========================================');
+log('worker', 'ASSISTENTE IA PESSOAL - Worker Node.js');
+log('worker', `Fila: ${FILA_DIR}`);
+log('worker', `Poll: ${INTERVALO_POLL_MS}ms`);
+log('worker', `Timeout CLI: ${TIMEOUT_MS}ms`);
+log('worker', `Supabase: ${SUPABASE_URL ? 'configurado' : 'AUSENTE'}`);
+log('worker', '========================================');
 
 // Garantir que diretorios existem
 if (!fs.existsSync(FILA_DIR)) fs.mkdirSync(FILA_DIR, { recursive: true });
 if (!fs.existsSync(PROCESSADOS_DIR)) fs.mkdirSync(PROCESSADOS_DIR, { recursive: true });
+if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 
 // Poll a cada 2 segundos (mais robusto que fs.watch em containers)
 setInterval(verificarFila, INTERVALO_POLL_MS);
@@ -333,4 +378,4 @@ setInterval(verificarFila, INTERVALO_POLL_MS);
 // Verificar imediatamente
 verificarFila();
 
-console.log('[worker] Monitorando fila...');
+log('worker', 'Monitorando fila...');
