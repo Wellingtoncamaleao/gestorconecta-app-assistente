@@ -22,5 +22,15 @@ if [ ! -f /home/claude-user/.claude/.claude.json ]; then
     fi
 fi
 
+# Aguardar PostgreSQL estar pronto (Easypanel nao tem depends_on)
+if [ -n "$DATABASE_DSN" ]; then
+    echo "[entrypoint] Aguardando PostgreSQL..."
+    for i in $(seq 1 30); do
+        php -r "try { new PDO(getenv('DATABASE_DSN'), getenv('DATABASE_USER'), getenv('DATABASE_PASSWORD')); echo 'OK'; exit(0); } catch(Exception \$e) { exit(1); }" 2>/dev/null && break
+        sleep 1
+    done
+    echo "[entrypoint] PostgreSQL pronto"
+fi
+
 echo "[entrypoint] Permissoes corrigidas, iniciando supervisord..."
 exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf

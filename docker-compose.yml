@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: assistente
+      POSTGRES_USER: assistente
+      POSTGRES_PASSWORD: assistente_dev_2026
+    ports:
+      - "5434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U assistente"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "9090:80"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_DSN: "pgsql:host=db;port=5432;dbname=assistente"
+      DATABASE_USER: assistente
+      DATABASE_PASSWORD: assistente_dev_2026
+      DATABASE_HOST: db
+      DATABASE_NAME: assistente
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_CHAT_IDS: '["8584895842"]'
+      EVOLUTION_API_URL: "https://evolution.gestorconecta.com.br"
+      EVOLUTION_API_KEY: "${EVOLUTION_API_KEY:-}"
+      EVOLUTION_INSTANCIA: assistente
+      WHATSAPP_CHAT_IDS: "[]"
+      FACEBOOK_APP_TOKEN: "${FACEBOOK_APP_TOKEN:-}"
+    volumes:
+      - claude-auth:/home/claude-user/.claude
+      - assistente-data:/var/assistente
+      - workspace:/workspace
+
+volumes:
+  pgdata:
+  claude-auth:
+  assistente-data:
+  workspace:

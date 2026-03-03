@@ -3,12 +3,12 @@ FROM php:8.4-fpm-bookworm
 # Dependencias do sistema + GD + ffmpeg + python3 + chromium
 RUN apt-get update && apt-get install -y \
     nginx supervisor curl git jq procps \
-    libcurl4-openssl-dev \
+    libcurl4-openssl-dev libpq-dev \
     libfreetype6-dev libjpeg62-turbo-dev libpng-dev libwebp-dev \
     ffmpeg python3 python3-pip python3-venv \
     chromium \
     && docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp \
-    && docker-php-ext-install curl gd \
+    && docker-php-ext-install curl gd pdo pdo_pgsql \
     && rm -rf /var/lib/apt/lists/*
 
 # yt-dlp (download de midia Instagram/YouTube)
@@ -22,9 +22,19 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 # Claude Code CLI
 RUN npm install -g @anthropic-ai/claude-code
 
+# GitHub CLI (para push/PR sem precisar de SSH key)
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update && apt-get install -y gh \
+    && rm -rf /var/lib/apt/lists/*
+
 # Usuario nao-root para Claude Code CLI (--dangerously-skip-permissions requer nao-root)
 RUN useradd -m -s /bin/bash claude-user \
-    && usermod -aG www-data claude-user
+    && usermod -aG www-data claude-user \
+    && git config --system user.name "Well-dev Assistente" \
+    && git config --system user.email "we@we.com"
 
 # Diretorios de trabalho
 RUN mkdir -p /var/assistente/fila/processados \

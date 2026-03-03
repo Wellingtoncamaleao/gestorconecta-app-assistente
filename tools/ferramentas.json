@@ -19,5 +19,12 @@
         "prompt": "ferramenta-youtube-resumo.txt",
         "max_turns": 10,
         "timeout_ms": 300000
+    },
+    "gestor-backup": {
+        "nome": "GestorBackup Negocios",
+        "descricao": "Estrategia comercial, precificacao, canais e projecoes do GestorBackup",
+        "prompt": "ferramenta-gestor-backup.txt",
+        "max_turns": 10,
+        "timeout_ms": 300000
     }
 }

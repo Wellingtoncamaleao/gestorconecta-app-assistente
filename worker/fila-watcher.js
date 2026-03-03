@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const http = require('http');
+const { Pool } = require('pg');
 
 // Diretorios
 const FILA_DIR = '/var/assistente/fila';
@@ -21,9 +22,22 @@ const TIMEOUT_PADRAO_MS = 300000; // 5 minutos
 const MAX_TURNS_PADRAO = 10;
 const INTERVALO_POLL_MS = 2000;
 
-// Supabase config
-const SUPABASE_URL = process.env.SUPABASE_URL || '';
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
+// PostgreSQL config
+const DB_HOST = process.env.DATABASE_HOST || 'db';
+const DB_USER = process.env.DATABASE_USER || 'assistente';
+const DB_PASS = process.env.DATABASE_PASSWORD || 'assistente_dev_2026';
+const DB_NAME = process.env.DATABASE_NAME || 'assistente';
+
+const pool = new Pool({
+    host: DB_HOST,
+    port: 5432,
+    user: DB_USER,
+    password: DB_PASS,
+    database: DB_NAME,
+    max: 3,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 10000,
+});
 
 // ========================================
 // LOG UNIFICADO (tudo em stdout)
@@ -62,33 +76,15 @@ function obterConfigFerramenta(slug) {
 }
 
 // ========================================
-// SUPABASE HELPERS
+// POSTGRESQL HELPERS
 // ========================================
 
-async function supabaseFetch(caminho, opcoes = {}) {
-    const url = `${SUPABASE_URL}/rest/v1/${caminho}`;
-    const metodo = opcoes.metodo || 'GET';
-    const corpo = opcoes.corpo ? JSON.stringify(opcoes.corpo) : undefined;
-
-    try {
-        const resposta = await fetch(url, {
-            method: metodo,
-            headers: {
-                'apikey': SUPABASE_KEY,
-                'Authorization': `Bearer ${SUPABASE_KEY}`,
-                'Content-Type': 'application/json',
-                'Prefer': 'return=representation',
-            },
-            body: corpo,
-        });
-
-        const dados = await resposta.json().catch(() => null);
-        return { ok: resposta.ok, status: resposta.status, dados };
-    } catch (erro) {
-        log('supabase', `Erro: ${erro.message}`);
-        return { ok: false, status: 0, dados: null };
-    }
-}
+// Testar conexao no boot
+pool.query('SELECT 1').then(() => {
+    log('db', 'PostgreSQL conectado');
+}).catch(err => {
+    log('db', `PostgreSQL FALHOU: ${err.message}`);
+});
 
 // ========================================
 // CARREGAR CONTEXTO
@@ -110,32 +106,32 @@ function carregarSystemPrompt(arquivoPrompt = 'sistema-padrao.txt') {
 }
 
 async function carregarMemoria() {
-    if (!SUPABASE_URL || !SUPABASE_KEY) return '';
-
-    const resultado = await supabaseFetch(
-        'assistente_memoria?order=relevancia.desc&limit=20'
-    );
-
-    if (!resultado.ok || !resultado.dados) return '';
-
-    return resultado.dados
-        .map(m => `[${m.categoria}/${m.chave}]: ${m.valor}`)
-        .join('\n');
+    try {
+        const { rows } = await pool.query(
+            'SELECT categoria, chave, valor FROM assistente_memoria ORDER BY relevancia DESC LIMIT 20'
+        );
+        return rows.map(m => `[${m.categoria}/${m.chave}]: ${m.valor}`).join('\n');
+    } catch (err) {
+        log('db', `Erro carregarMemoria: ${err.message}`);
+        return '';
+    }
 }
 
 async function carregarHistorico(sessaoId) {
-    if (!sessaoId || !SUPABASE_URL || !SUPABASE_KEY) return '';
-
-    const resultado = await supabaseFetch(
-        `assistente_mensagens?sessao_id=eq.${sessaoId}&order=criado_em.desc&limit=5`
-    );
-
-    if (!resultado.ok || !resultado.dados) return '';
-
-    return resultado.dados
-        .reverse()
-        .map(m => `${m.direcao === 'recebida' ? 'Wellington' : 'Well-dev'}: ${m.conteudo}`)
-        .join('\n');
+    if (!sessaoId) return '';
+    try {
+        const { rows } = await pool.query(
+            'SELECT direcao, conteudo FROM assistente_mensagens WHERE sessao_id = $1 ORDER BY criado_em DESC LIMIT 5',
+            [sessaoId]
+        );
+        return rows
+            .reverse()
+            .map(m => `${m.direcao === 'recebida' ? 'Wellington' : 'Well-dev'}: ${m.conteudo}`)
+            .join('\n');
+    } catch (err) {
+        log('db', `Erro carregarHistorico: ${err.message}`);
+        return '';
+    }
 }
 
 // ========================================
@@ -380,35 +376,31 @@ async function processarItem(arquivo) {
         // Enviar resposta ao canal (com thread_id para Topics)
         await enviarViaPHP(item.canal, item.chat_id, resultado.texto, item.message_id, item.thread_id);
 
-        // Salvar resposta no Supabase
-        if (SUPABASE_URL && SUPABASE_KEY) {
-            await supabaseFetch('assistente_mensagens', {
-                metodo: 'POST',
-                corpo: {
-                    sessao_id: item.sessao_id,
-                    canal: item.canal,
-                    chat_id: item.chat_id,
-                    direcao: 'enviada',
-                    conteudo: resultado.texto,
-                    tokens_entrada: resultado.tokensEntrada,
-                    tokens_saida: resultado.tokensSaida,
-                    tempo_resposta_ms: resultado.tempoMs,
-                    modelo: resultado.modelo,
-                    metadata: { ferramenta: ferramentaSlug },
-                }
-            });
+        // Salvar resposta no PostgreSQL
+        try {
+            await pool.query(
+                `INSERT INTO assistente_mensagens
+                 (sessao_id, canal, chat_id, direcao, conteudo, tokens_entrada, tokens_saida, tempo_resposta_ms, modelo, metadata)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+                [
+                    item.sessao_id, item.canal, item.chat_id, 'enviada', resultado.texto,
+                    resultado.tokensEntrada, resultado.tokensSaida, resultado.tempoMs,
+                    resultado.modelo, JSON.stringify({ ferramenta: ferramentaSlug })
+                ]
+            );
 
             if (resultado.sessionId && item.sessao_id) {
-                await supabaseFetch(`assistente_sessoes?id=eq.${item.sessao_id}`, {
-                    metodo: 'PATCH',
-                    corpo: {
-                        claude_session_id: resultado.sessionId,
-                        ferramenta: ferramentaSlug,
-                        ultima_mensagem_em: new Date().toISOString(),
-                        atualizado_em: new Date().toISOString(),
-                    }
-                });
+                const agora = new Date().toISOString();
+                await pool.query(
+                    `UPDATE assistente_sessoes
+                     SET claude_session_id = $1, ferramenta = $2,
+                         ultima_mensagem_em = $3, atualizado_em = $4
+                     WHERE id = $5`,
+                    [resultado.sessionId, ferramentaSlug, agora, agora, item.sessao_id]
+                );
             }
+        } catch (dbErr) {
+            log('db', `Erro ao salvar resposta: ${dbErr.message}`);
         }
 
         // Mover para processados
@@ -485,7 +477,7 @@ log('worker', 'ASSISTENTE IA PESSOAL - Worker Node.js');
 log('worker', `HOME: ${process.env.HOME}`);
 log('worker', `Fila: ${FILA_DIR}`);
 log('worker', `Ferramentas: ${totalFerramentas} carregadas (${Object.keys(ferramentas).join(', ')})`);
-log('worker', `Supabase: ${SUPABASE_URL ? 'configurado' : 'AUSENTE'}`);
+log('worker', `PostgreSQL: ${DB_HOST}/${DB_NAME}`);
 log('worker', '========================================');
 
 // Garantir que diretorios existem

@@ -6,40 +6,19 @@
 require_once __DIR__ . '/config.php';
 
 // ========================================
-// SUPABASE
+// BANCO DE DADOS (PostgreSQL via PDO)
 // ========================================
 
-function supabaseFetch($caminho, $opcoes = []) {
-    $metodo = $opcoes['metodo'] ?? 'GET';
-    $corpo = $opcoes['corpo'] ?? null;
-    $headers = [
-        'apikey: ' . SUPABASE_SERVICE_KEY,
-        'Authorization: Bearer ' . SUPABASE_SERVICE_KEY,
-        'Content-Type: application/json',
-        'Prefer: return=representation'
-    ];
-
-    $ch = curl_init(SUPABASE_URL . '/rest/v1/' . $caminho);
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_HTTPHEADER => $headers,
-        CURLOPT_TIMEOUT => 15,
-        CURLOPT_CUSTOMREQUEST => $metodo,
-    ]);
-
-    if ($corpo !== null) {
-        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($corpo));
+function getDb() {
+    static $pdo = null;
+    if ($pdo === null) {
+        $pdo = new PDO(DATABASE_DSN, DATABASE_USER, DATABASE_PASSWORD, [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::ATTR_EMULATE_PREPARES => false,
+        ]);
     }
-
-    $resposta = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-
-    return [
-        'ok' => $httpCode >= 200 && $httpCode < 300,
-        'status' => $httpCode,
-        'dados' => json_decode($resposta, true)
-    ];
+    return $pdo;
 }
 
 // ========================================
@@ -136,30 +115,34 @@ function enviarWhatsApp($chatId, $texto) {
 // ========================================
 
 function buscarOuCriarSessao($canal, $chatId) {
-    // Buscar sessao ativa
-    $resultado = supabaseFetch(
-        'assistente_sessoes?canal=eq.' . $canal .
-        '&chat_id=eq.' . $chatId .
-        '&status=eq.ativa' .
-        '&order=ultima_mensagem_em.desc&limit=1'
-    );
+    $db = getDb();
 
-    if ($resultado['ok'] && !empty($resultado['dados'])) {
-        return $resultado['dados'][0];
-    }
+    // Buscar sessao ativa
+    $stmt = $db->prepare(
+        'SELECT * FROM assistente_sessoes
+         WHERE canal = :canal AND chat_id = :chat_id AND status = :status
+         ORDER BY ultima_mensagem_em DESC NULLS LAST LIMIT 1'
+    );
+    $stmt->execute([':canal' => $canal, ':chat_id' => $chatId, ':status' => 'ativa']);
+    $sessao = $stmt->fetch();
+
+    if ($sessao) return $sessao;
 
     // Criar nova sessao
-    $nova = supabaseFetch('assistente_sessoes', [
-        'metodo' => 'POST',
-        'corpo' => [
-            'canal' => $canal,
-            'chat_id' => $chatId,
-            'status' => 'ativa',
-            'ultima_mensagem_em' => date('c'),
-        ]
+    $stmt = $db->prepare(
+        'INSERT INTO assistente_sessoes (canal, chat_id, status, ultima_mensagem_em)
+         VALUES (:canal, :chat_id, :status, :ultima_mensagem_em)
+         RETURNING *'
+    );
+    $stmt->execute([
+        ':canal' => $canal,
+        ':chat_id' => $chatId,
+        ':status' => 'ativa',
+        ':ultima_mensagem_em' => date('c'),
     ]);
+    $nova = $stmt->fetch();
 
-    return $nova['dados'][0] ?? ['id' => null, 'claude_session_id' => null];
+    return $nova ?: ['id' => null, 'claude_session_id' => null];
 }
 
 // ========================================
@@ -167,28 +150,32 @@ function buscarOuCriarSessao($canal, $chatId) {
 // ========================================
 
 function salvarMensagem($sessaoId, $canal, $chatId, $direcao, $conteudo, $metadata = []) {
-    supabaseFetch('assistente_mensagens', [
-        'metodo' => 'POST',
-        'corpo' => [
-            'sessao_id' => $sessaoId,
-            'canal' => $canal,
-            'chat_id' => $chatId,
-            'direcao' => $direcao,
-            'conteudo' => $conteudo,
-            'metadata' => $metadata,
-        ]
+    $db = getDb();
+
+    $stmt = $db->prepare(
+        'INSERT INTO assistente_mensagens (sessao_id, canal, chat_id, direcao, conteudo, metadata)
+         VALUES (:sessao_id, :canal, :chat_id, :direcao, :conteudo, :metadata)'
+    );
+    $stmt->execute([
+        ':sessao_id' => $sessaoId,
+        ':canal' => $canal,
+        ':chat_id' => $chatId,
+        ':direcao' => $direcao,
+        ':conteudo' => $conteudo,
+        ':metadata' => json_encode($metadata),
     ]);
 
     // Atualizar contador e timestamp da sessao
     if ($sessaoId) {
-        supabaseFetch('assistente_sessoes?id=eq.' . $sessaoId, [
-            'metodo' => 'PATCH',
-            'corpo' => [
-                'total_mensagens' => 'total_mensagens + 1',
-                'ultima_mensagem_em' => date('c'),
-                'atualizado_em' => date('c'),
-            ]
-        ]);
+        $agora = date('c');
+        $stmt = $db->prepare(
+            'UPDATE assistente_sessoes
+             SET total_mensagens = total_mensagens + 1,
+                 ultima_mensagem_em = :agora,
+                 atualizado_em = :agora2
+             WHERE id = :id'
+        );
+        $stmt->execute([':agora' => $agora, ':agora2' => $agora, ':id' => $sessaoId]);
     }
 }
 
@@ -212,15 +199,21 @@ function criarItemFila($dados) {
 // ========================================
 
 function logAssistente($nivel, $componente, $mensagem, $dados = []) {
-    supabaseFetch('assistente_logs', [
-        'metodo' => 'POST',
-        'corpo' => [
-            'nivel' => $nivel,
-            'componente' => $componente,
-            'mensagem' => $mensagem,
-            'dados' => $dados,
-        ]
-    ]);
+    try {
+        $db = getDb();
+        $stmt = $db->prepare(
+            'INSERT INTO assistente_logs (nivel, componente, mensagem, dados)
+             VALUES (:nivel, :componente, :mensagem, :dados)'
+        );
+        $stmt->execute([
+            ':nivel' => $nivel,
+            ':componente' => $componente,
+            ':mensagem' => $mensagem,
+            ':dados' => json_encode($dados),
+        ]);
+    } catch (\Exception $e) {
+        error_log('logAssistente falhou: ' . $e->getMessage());
+    }
 }
 
 // ========================================
@@ -228,8 +221,11 @@ function logAssistente($nivel, $componente, $mensagem, $dados = []) {
 // ========================================
 
 function buscarConfig($chave) {
-    $resultado = supabaseFetch('assistente_configs?chave=eq.' . $chave . '&limit=1');
-    return ($resultado['ok'] && !empty($resultado['dados'])) ? $resultado['dados'][0]['valor'] : null;
+    $db = getDb();
+    $stmt = $db->prepare('SELECT valor FROM assistente_configs WHERE chave = :chave LIMIT 1');
+    $stmt->execute([':chave' => $chave]);
+    $resultado = $stmt->fetch();
+    return $resultado ? $resultado['valor'] : null;
 }
 
 // ========================================
@@ -319,10 +315,11 @@ function mapearFerramenta($chatId, $threadId, $slug) {
     $mapa[$chave] = $slug;
 
     // Upsert no configs
-    supabaseFetch('assistente_configs?chave=eq.mapa_topicos', [
-        'metodo' => 'PATCH',
-        'corpo' => ['valor' => json_encode($mapa), 'atualizado_em' => date('c')]
-    ]);
+    $db = getDb();
+    $stmt = $db->prepare(
+        'UPDATE assistente_configs SET valor = :valor, atualizado_em = :agora WHERE chave = :chave'
+    );
+    $stmt->execute([':valor' => json_encode($mapa), ':agora' => date('c'), ':chave' => 'mapa_topicos']);
 
     $nome = $ferramentas[$slug]['nome'] ?? $slug;
     $tipo = $threadId ? 'Topico' : 'Grupo';
@@ -343,10 +340,11 @@ function desmapearFerramenta($chatId, $threadId) {
 
     unset($mapa[$chave]);
 
-    supabaseFetch('assistente_configs?chave=eq.mapa_topicos', [
-        'metodo' => 'PATCH',
-        'corpo' => ['valor' => json_encode($mapa), 'atualizado_em' => date('c')]
-    ]);
+    $db = getDb();
+    $stmt = $db->prepare(
+        'UPDATE assistente_configs SET valor = :valor, atualizado_em = :agora WHERE chave = :chave'
+    );
+    $stmt->execute([':valor' => json_encode($mapa), ':agora' => date('c'), ':chave' => 'mapa_topicos']);
 
     return "Mapeamento removido (era: `{$antigo}`).\nVoltou para modo *Geral*.";
 }
@@ -964,29 +962,36 @@ function processarComando($texto, $chatId, $threadId) {
     // /reset — limpar sessao do topico/chat atual
     if ($texto === '/reset') {
         $sessaoKey = $threadId ? $chatId . ':' . $threadId : $chatId;
-        // 1. Buscar sessoes ativas por GET
-        $busca = supabaseFetch(
-            'assistente_sessoes?canal=eq.telegram&chat_id=eq.' . urlencode($sessaoKey) . '&status=eq.ativa&select=id'
-        );
-        if ($busca['ok'] && !empty($busca['dados'])) {
-            // 2. Encerrar cada sessao pelo id (PATCH por UUID — confiavel)
-            $qtd = 0;
-            foreach ($busca['dados'] as $sessao) {
-                $patch = supabaseFetch('assistente_sessoes?id=eq.' . $sessao['id'], [
-                    'metodo' => 'PATCH',
-                    'corpo' => ['status' => 'encerrada', 'atualizado_em' => date('c')]
-                ]);
-                if ($patch['ok']) $qtd++;
+        try {
+            $db = getDb();
+
+            // 1. Buscar sessoes ativas
+            $stmt = $db->prepare(
+                'SELECT id FROM assistente_sessoes
+                 WHERE canal = :canal AND chat_id = :chat_id AND status = :status'
+            );
+            $stmt->execute([':canal' => 'telegram', ':chat_id' => $sessaoKey, ':status' => 'ativa']);
+            $sessoes = $stmt->fetchAll();
+
+            if (!empty($sessoes)) {
+                // 2. Encerrar cada sessao
+                $stmtPatch = $db->prepare(
+                    'UPDATE assistente_sessoes SET status = :status, atualizado_em = :agora WHERE id = :id'
+                );
+                $qtd = 0;
+                foreach ($sessoes as $sessao) {
+                    $stmtPatch->execute([':status' => 'encerrada', ':agora' => date('c'), ':id' => $sessao['id']]);
+                    $qtd++;
+                }
+                $msg = "Sessao resetada ($qtd encerrada). Proxima mensagem inicia conversa nova.";
+            } else {
+                $msg = "Nenhuma sessao ativa encontrada. Proxima mensagem ja inicia conversa nova.";
             }
-            $msg = "Sessao resetada ($qtd encerrada). Proxima mensagem inicia conversa nova.";
-        } elseif ($busca['ok']) {
-            $msg = "Nenhuma sessao ativa encontrada. Proxima mensagem ja inicia conversa nova.";
-        } else {
-            $msg = "Erro ao buscar sessao (HTTP {$busca['status']}). Tente novamente.";
-            logAssistente('erro', 'reset', 'Falha GET sessao', [
+        } catch (\Exception $e) {
+            $msg = "Erro ao buscar sessao. Tente novamente.";
+            logAssistente('erro', 'reset', 'Falha ao resetar sessao', [
                 'sessaoKey' => $sessaoKey,
-                'status' => $busca['status'],
-                'resposta' => $busca['dados'],
+                'erro' => $e->getMessage(),
             ]);
         }
         enviarTelegram($chatId, $msg, $extras);

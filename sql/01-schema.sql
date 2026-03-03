@@ -1,8 +1,11 @@
 -- ========================================
 -- ASSISTENTE IA PESSOAL - Schema SQL
--- Prefixo: assistente_ (Supabase compartilhado)
--- Rodar no Supabase SQL Editor
+-- Prefixo: assistente_
+-- PostgreSQL 17 (local ou Easypanel)
 -- ========================================
+
+-- UUID support (PostgreSQL 14+ tem gen_random_uuid() nativo, mas pgcrypto garante compatibilidade)
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- SESSOES (uma por conversa com Claude Code)
 CREATE TABLE IF NOT EXISTS assistente_sessoes (
@@ -12,6 +15,7 @@ CREATE TABLE IF NOT EXISTS assistente_sessoes (
     claude_session_id TEXT,
     titulo TEXT,
     status TEXT DEFAULT 'ativa',
+    ferramenta TEXT DEFAULT 'geral',
     total_tokens_entrada BIGINT DEFAULT 0,
     total_tokens_saida BIGINT DEFAULT 0,
     total_mensagens INT DEFAULT 0,
@@ -73,26 +77,12 @@ CREATE TABLE IF NOT EXISTS assistente_logs (
 CREATE INDEX IF NOT EXISTS idx_assistente_sessoes_canal ON assistente_sessoes(canal, chat_id);
 CREATE INDEX IF NOT EXISTS idx_assistente_sessoes_status ON assistente_sessoes(status);
 CREATE INDEX IF NOT EXISTS idx_assistente_sessoes_ultima ON assistente_sessoes(ultima_mensagem_em DESC);
+CREATE INDEX IF NOT EXISTS idx_assistente_sessoes_ferramenta ON assistente_sessoes(ferramenta);
 CREATE INDEX IF NOT EXISTS idx_assistente_mensagens_sessao ON assistente_mensagens(sessao_id);
 CREATE INDEX IF NOT EXISTS idx_assistente_mensagens_canal ON assistente_mensagens(canal, chat_id);
 CREATE INDEX IF NOT EXISTS idx_assistente_mensagens_criado ON assistente_mensagens(criado_em DESC);
 CREATE INDEX IF NOT EXISTS idx_assistente_memoria_categoria ON assistente_memoria(categoria);
 CREATE INDEX IF NOT EXISTS idx_assistente_logs_criado ON assistente_logs(criado_em DESC);
-
--- ========================================
--- RLS (acesso via service_role — usuario unico)
--- ========================================
-ALTER TABLE assistente_sessoes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE assistente_mensagens ENABLE ROW LEVEL SECURITY;
-ALTER TABLE assistente_memoria ENABLE ROW LEVEL SECURITY;
-ALTER TABLE assistente_configs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE assistente_logs ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "assistente_sessoes_all" ON assistente_sessoes FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "assistente_mensagens_all" ON assistente_mensagens FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "assistente_memoria_all" ON assistente_memoria FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "assistente_configs_all" ON assistente_configs FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "assistente_logs_all" ON assistente_logs FOR ALL USING (true) WITH CHECK (true);
 
 -- ========================================
 -- SEED: CONFIGS
@@ -105,11 +95,12 @@ INSERT INTO assistente_configs (chave, valor) VALUES
     ('telegram_chat_ids_permitidos', '[]'),
     ('whatsapp_chat_ids_permitidos', '[]'),
     ('evolution_instancia', ''),
-    ('system_prompt_arquivo', 'prompts/sistema-padrao.txt')
+    ('system_prompt_arquivo', 'prompts/sistema-padrao.txt'),
+    ('mapa_topicos', '{}')
 ON CONFLICT (chave) DO NOTHING;
 
 -- ========================================
--- SEED: MEMORIA INICIAL (migrada do OpenClaw)
+-- SEED: MEMORIA INICIAL
 -- ========================================
 INSERT INTO assistente_memoria (categoria, chave, valor) VALUES
     ('projeto', 'control', 'ERP multi-tenant em D:/GESTORCONECTA/APP/control — prioridade alta'),

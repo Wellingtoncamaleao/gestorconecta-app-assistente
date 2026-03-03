@@ -5,19 +5,23 @@
  * NUNCA commitar config.php (esta no .gitignore)
  */
 
-// Supabase
-define('SUPABASE_URL', 'https://SEU-PROJETO.supabase.co');
-define('SUPABASE_SERVICE_KEY', 'eyJ...');
+// PostgreSQL (container local ou Easypanel)
+define('DATABASE_DSN', getenv('DATABASE_DSN') ?: 'pgsql:host=localhost;port=5432;dbname=assistente');
+define('DATABASE_USER', getenv('DATABASE_USER') ?: 'assistente');
+define('DATABASE_PASSWORD', getenv('DATABASE_PASSWORD') ?: 'assistente_dev_2026');
 
 // Telegram Bot
-define('TELEGRAM_BOT_TOKEN', 'SEU_TOKEN_DO_BOTFATHER');
-define('TELEGRAM_CHAT_IDS', ['SEU_CHAT_ID']);
+define('TELEGRAM_BOT_TOKEN', getenv('TELEGRAM_BOT_TOKEN') ?: '');
+define('TELEGRAM_CHAT_IDS', json_decode(getenv('TELEGRAM_CHAT_IDS') ?: '[]', true) ?: []);
 
 // Evolution API (WhatsApp)
-define('EVOLUTION_API_URL', 'https://evolution.gestorconecta.com.br');
-define('EVOLUTION_API_KEY', 'SUA_KEY');
-define('EVOLUTION_INSTANCIA', 'assistente');
-define('WHATSAPP_CHAT_IDS', ['5511999999999@s.whatsapp.net']);
+define('EVOLUTION_API_URL', getenv('EVOLUTION_API_URL') ?: 'https://evolution.gestorconecta.com.br');
+define('EVOLUTION_API_KEY', getenv('EVOLUTION_API_KEY') ?: '');
+define('EVOLUTION_INSTANCIA', getenv('EVOLUTION_INSTANCIA') ?: 'assistente');
+define('WHATSAPP_CHAT_IDS', json_decode(getenv('WHATSAPP_CHAT_IDS') ?: '[]', true) ?: []);
+
+// Facebook (Instagram oEmbed)
+define('FACEBOOK_APP_TOKEN', getenv('FACEBOOK_APP_TOKEN') ?: '');
 
 // Fila (diretorio no container)
 define('FILA_DIR', '/var/assistente/fila');

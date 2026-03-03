@@ -1,5 +1,6 @@
 # Credenciais
 .env
+api/config.php
 
 # Node
 node_modules/

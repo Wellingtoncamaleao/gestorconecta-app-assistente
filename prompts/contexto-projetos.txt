@@ -5,6 +5,7 @@
 - APP/Recupera: Recuperacao vendas WhatsApp (D:/GESTORCONECTA/APP/recupera) — Pendente setup
 - APP/F720: Gestao financeira (D:/GESTORCONECTA/APP/f720) — Funcional
 - APP/Painel: Central de inteligencia (D:/GESTORCONECTA/APP/painel) — Pendente setup
+- APP/Backup (GestorBackup): Backup automatico para empresas, SaaS alta margem (D:/GESTORCONECTA/APP/backup) — Pronto para producao
 - APP/Prospeccao: Captacao leads B2B (D:/GESTORCONECTA/APP/prospeccao) — 159k empresas coletadas
 - MED/Prontuario: Prontuario eletronico SaaS (D:/GESTORCONECTA/MED/prontuario) — Em producao
 - GOV: RH + Tombamento (D:/GESTORCONECTA/GOV) — Funcionais
@@ -30,4 +31,4 @@ Gemini (F720/DARKFLOW/Painel), ElevenLabs (DARKFLOW), YouTube (DARKFLOW), Claude
 
 # PREFIXOS SUPABASE
 
-control_, leads_, loyal_, recupera_, painel_, darkflow_, rh_, tombamento_, site_, raioxf25_, camisas_, assistente_
+control_, leads_, loyal_, recupera_, painel_, darkflow_, rh_, tombamento_, site_, raioxf25_, camisas_, assistente_, backup_

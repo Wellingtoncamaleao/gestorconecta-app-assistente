@@ -47,16 +47,11 @@
     // CONFIG
     // ========================================
 
-    const SUPABASE_URL = ''; // preencher
-    const SUPABASE_KEY = ''; // preencher (anon key para web)
+    const API_URL = '/api/painel.php';
 
-    async function supabaseFetch(caminho) {
-        const resp = await fetch(`${SUPABASE_URL}/rest/v1/${caminho}`, {
-            headers: {
-                'apikey': SUPABASE_KEY,
-                'Authorization': `Bearer ${SUPABASE_KEY}`,
-            }
-        });
+    async function apiFetch(acao, params = {}) {
+        const queryParams = new URLSearchParams({ acao, ...params });
+        const resp = await fetch(`${API_URL}?${queryParams}`);
         return resp.json();
     }
 
@@ -84,9 +79,7 @@
     // ========================================
 
     async function carregarSessoes() {
-        const sessoes = await supabaseFetch(
-            'assistente_sessoes?order=ultima_mensagem_em.desc&limit=20'
-        );
+        const sessoes = await apiFetch('sessoes');
 
         const lista = document.getElementById('lista-sessoes');
         lista.innerHTML = sessoes.map(s => `
@@ -104,9 +97,7 @@
         sessaoAtiva = id;
         carregarSessoes(); // re-render lista
 
-        const msgs = await supabaseFetch(
-            `assistente_mensagens?sessao_id=eq.${id}&order=criado_em.asc&limit=100`
-        );
+        const msgs = await apiFetch('mensagens', { sessao_id: id });
 
         const container = document.getElementById('mensagens');
         container.innerHTML = msgs.map(m => `
@@ -125,9 +116,7 @@
     // ========================================
 
     async function carregarMemoria() {
-        const memorias = await supabaseFetch(
-            'assistente_memoria?order=categoria.asc,chave.asc'
-        );
+        const memorias = await apiFetch('memoria');
 
         const lista = document.getElementById('lista-memoria');
         lista.innerHTML = memorias.map(m => `
@@ -144,9 +133,7 @@
     // ========================================
 
     async function carregarLogs() {
-        const logs = await supabaseFetch(
-            'assistente_logs?order=criado_em.desc&limit=50'
-        );
+        const logs = await apiFetch('logs');
 
         const lista = document.getElementById('lista-logs');
         lista.innerHTML = logs.map(l => `
@@ -184,11 +171,7 @@
         setInterval(carregarLogs, 15000);
     }
 
-    if (SUPABASE_URL && SUPABASE_KEY) {
-        iniciar();
-    } else {
-        document.getElementById('status').textContent = 'Configurar SUPABASE_URL e SUPABASE_KEY';
-    }
+    iniciar();
     </script>
 </body>
 </html>
