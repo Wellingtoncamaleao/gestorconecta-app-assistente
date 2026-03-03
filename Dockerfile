@@ -45,6 +45,9 @@ RUN mkdir -p /var/assistente/fila/processados \
     /tmp/assistente \
     /tmp/assistente/media
 
+# PHP-FPM: repassar variaveis de ambiente do container para os processos PHP
+RUN echo 'clear_env = no' >> /usr/local/etc/php-fpm.d/www.conf
+
 # Configs do servidor
 COPY nginx.conf /etc/nginx/sites-available/default
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
@@ -53,6 +56,7 @@ RUN chmod +x /entrypoint.sh
 
 # Aplicacao
 COPY api/ /var/www/html/api/
+RUN cp /var/www/html/api/config.php.exemplo /var/www/html/api/config.php
 COPY prompts/ /var/www/html/prompts/
 COPY tools/ /var/www/html/tools/
 COPY web/ /var/www/html/web/
